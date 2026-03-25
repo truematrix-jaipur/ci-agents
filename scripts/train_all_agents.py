@@ -1,17 +1,19 @@
 import sys
 import os
 import json
+from pathlib import Path
 import redis
 
 # Append project root
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+_PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
 from core.db_connectors.db_manager import db_manager
 
 def train_swarm():
     print("🚀 Initializing Swarm-Wide Training...")
-    
-    # 1. Read the Manual
-    manual_path = "/home/agents/docs/swarm_operations_manual.md"
+
+    # 1. Read the Manual — path derived from project root, not hard-coded
+    manual_path = _PROJECT_ROOT / "docs" / "swarm_operations_manual.md"
     with open(manual_path, "r") as f:
         manual_content = f.read()
 

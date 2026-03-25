@@ -16,7 +16,7 @@ class SpeedOptimizerAgent:
             "metrics": {
                 "LCP": "2.5s",
                 "FID": "100ms",
-                "CLS": "15ms"
+                "CLS": "0.15",   # CLS is a dimensionless layout shift score, not a time unit
             },
             "recommendations": [
                 "Optimize images on homepage",

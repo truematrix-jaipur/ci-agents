@@ -5,10 +5,12 @@ import datetime
 import uuid
 import logging
 from enum import Enum
+from pathlib import Path
 from typing import Optional, List, Dict
 
-# Standard Paths
-TRACKER_DB = "/home/agents/tracker/data/swarm_tracker.db"
+# Derive DB path from this file's location so it works in any environment
+_TRACKER_DIR = Path(__file__).parent / "data"
+TRACKER_DB = str(_TRACKER_DIR / "swarm_tracker.db")
 
 class EntryType(Enum):
     BUG = "bug"

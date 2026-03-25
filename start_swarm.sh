@@ -1,13 +1,21 @@
 #!/bin/bash
+set -euo pipefail
 
-# Start all agents in the background with nohup
+# Start all agents + API server in the background with nohup
 echo "Starting TrueMatrix Swarm Agents..."
+
+# Ensure log directory exists before any agent starts
+mkdir -p logs
 
 # Clean up environment to avoid conflicts with old keys
 unset GOOGLE_SERVICE_ACCOUNT_PATH
 unset GOOGLE_API_KEY
 unset GOOGLE_APPLICATION_CREDENTIALS
 
+# ── Core API Server ────────────────────────────────────────────────────────
+nohup python3 core/api_server.py > logs/api_server.log 2>&1 &
+
+# ── Specialized Agents ─────────────────────────────────────────────────────
 nohup python3 agents/wordpress_tech/agent.py > logs/wordpress_tech.log 2>&1 &
 nohup python3 agents/seo_agent/agent.py > logs/seo_agent.log 2>&1 &
 nohup python3 agents/data_analyser/agent.py > logs/data_analyser.log 2>&1 &
@@ -27,4 +35,4 @@ nohup python3 agents/training_agent/agent.py > logs/training_agent.log 2>&1 &
 nohup python3 agents/agent_builder/agent.py > logs/agent_builder.log 2>&1 &
 nohup python3 agents/server_agent/agent.py > logs/server_agent.log 2>&1 &
 
-echo "All agents started with nohup. Logs available in logs/ directory."
+echo "All agents and API server started. Logs available in logs/ directory."

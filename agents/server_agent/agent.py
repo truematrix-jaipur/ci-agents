@@ -84,12 +84,12 @@ class ServerAgent(BaseAgent):
     def _execute_safe_command(self, cmd_list, task_data, description, shell=False):
         """Wrapper to execute and log system commands safely."""
         try:
-            # If shell=True, cmd_list should be a string
+            # If shell=True, cmd_list should be a string; otherwise a list
             cmd_str = cmd_list if shell else ' '.join(cmd_list)
             logger.info(f"Executing: {cmd_str}")
-            if shell:
-                return None
-            result = subprocess.run(cmd_list, capture_output=True, text=True, timeout=30, shell=False)
+            result = subprocess.run(
+                cmd_list, capture_output=True, text=True, timeout=30, shell=shell
+            )
             
             self.log_execution(
                 task=task_data,

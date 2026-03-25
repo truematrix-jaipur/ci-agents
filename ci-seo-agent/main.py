@@ -295,7 +295,7 @@ def status(_=Depends(require_secret)):
                 "next_run": next_run.isoformat() if next_run else None,
             })
     return {
-        "agent": "CI SEO Agent v1.0",
+        "agent": "CI SEO Agent v2.0.0",
         "site": "indogenmed.org",
         "state": state,
         "chroma_stats": stats,

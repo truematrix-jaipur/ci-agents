@@ -1,0 +1,79 @@
+# =============================================================================
+# agents swarm — .gitignore
+# =============================================================================
+
+# ── Secrets & credentials ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.json.key
+*service_account*.json
+*_sa.json
+ci-agents-*.json
+credentials/
+config/settings.py
+# MCP config files always contain live API keys/tokens
+.mcp.json
+**/.mcp.json
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+*.whl
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ── Testing ──────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+coverage.xml
+nosetests.xml
+test-results/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+*.log.[0-9]*
+
+# ── Runtime data / databases ─────────────────────────────────────────────────
+data/chroma/
+**/data/chroma/
+tracker/data/
+*.sqlite3
+*.db
+
+# ── Browser binary (Chrome) ──────────────────────────────────────────────────
+google/chrome/
+
+# ── Playwright MCP session artifacts ─────────────────────────────────────────
+.playwright-mcp/
+
+# ── OS artifacts ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+
+# ── Claude Code ──────────────────────────────────────────────────────────────
+.claude/settings.local.json

@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swarm Intelligence - Army of Agents Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script>window.react = React;</script>
+    <script src="https://unpkg.com/lucide-react@0.460.0/dist/umd/lucide-react.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <style>
+        body { background-color: #0F172A; color: #F8FAFC; font-family: system-ui, -apple-system, sans-serif; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .pulse-active { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .suggestion-item:hover { background: rgba(14, 165, 233, 0.1); color: #0ea5e9; }
+        .log-content { white-space: pre-wrap; word-break: break-word; }
+        textarea.auto-height { min-height: 56px; max-height: 200px; resize: none; }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: { brand: { 500: '#0ea5e9', 600: '#0284c7' } } } }
+        };
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { Shield, Search, Database, RefreshCw, Layers, Layout, TrendingUp, Mail, Share2, Palette, Settings, Terminal, MessageSquare, Activity, ChevronRight, Play, Cpu, Box, Globe, Zap, BookOpen, Hammer, ShieldAlert, Bug, Rocket, Construction, LogOut, User, Lock, ExternalLink } = LucideReact;
+
+        const API_BASE = "/army-api";
+        const GOOGLE_CLIENT_ID = "1060185715012-siki6kjg9gd8vflp7oqv4uj7kj3laqjm.apps.googleusercontent.com";
+
+        const AGENT_LIST = [
+            { id: "wordpress_tech", name: "WP Tech", icon: Globe, color: "text-blue-400" },
+            { id: "seo_agent", name: "SEO Master", icon: Search, color: "text-green-400" },
+            { id: "data_analyser", name: "Data Brain", icon: Database, color: "text-purple-400" },
+            { id: "integration_agent", name: "Integrator", icon: Layers, color: "text-orange-400" },
+            { id: "erpnext_agent", name: "ERP Functional", icon: Layout, color: "text-cyan-400" },
+            { id: "erpnext_dev_agent", name: "ERP Developer", icon: Settings, color: "text-red-400" },
+            { id: "devops_agent", name: "SRE / DevOps", icon: Shield, color: "text-emerald-400" },
+            { id: "growth_agent", name: "Growth CGO", icon: TrendingUp, color: "text-yellow-400" },
+            { id: "campaign_planner_agent", name: "Campaign Planner", icon: Play, color: "text-pink-400" },
+            { id: "email_marketing_agent", name: "Email Strategist", icon: Mail, color: "text-sky-400" },
+            { id: "google_agent", name: "Google Ecosystem", icon: Activity, color: "text-blue-600" },
+            { id: "fb_campaign_manager", name: "Meta Manager", icon: Share2, color: "text-indigo-400" },
+            { id: "smo_agent", name: "SMO Specialist", icon: Share2, color: "text-teal-400" },
+            { id: "design_agent", name: "UI/UX Designer", icon: Palette, color: "text-violet-400" },
+            { id: "skill_agent", name: "Skill Scout", icon: Zap, color: "text-yellow-300" },
+            { id: "training_agent", name: "Master Trainer", icon: BookOpen, color: "text-orange-300" },
+            { id: "agent_builder", name: "Agent Architect", icon: Hammer, color: "text-blue-300" },
+            { id: "server_agent", name: "Server Guardian", icon: ShieldAlert, color: "text-red-500" }
+        ];
+
+        const App = () => {
+            const [view, setView] = useState("swarm");
+            const [selectedAgent, setSelectedAgent] = useState(null);
+            const [logs, setLogs] = useState([]);
+            const [trackerEntries, setTrackerEntries] = useState([]);
+            const [chatMessage, setChatMessage] = useState("");
+            const [isLoggedIn, setIsLoggedIn] = useState(false);
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [loginEmail, setLoginEmail] = useState("");
+            const [loginPassword, setLoginPassword] = useState("");
+            const [showSuggestions, setShowSuggestions] = useState(false);
+            const [filteredAgents, setFilteredAgents] = useState([]);
+            const scrollRef = useRef(null);
+            const textareaRef = useRef(null);
+
+            useEffect(() => {
+                const saved = localStorage.getItem('tm_session');
+                if (saved) {
+                    const session = JSON.parse(saved);
+                    setIsLoggedIn(true);
+                    setUser(session.user);
+                    refreshData(session.token);
+                    const interval = setInterval(() => refreshData(session.token), 5000);
+                    return () => clearInterval(interval);
+                }
+                setLoading(false);
+                initGoogle();
+            }, []);
+
+            const initGoogle = () => {
+                if (window.google) {
+                    window.google.accounts.id.initialize({
+                        client_id: GOOGLE_CLIENT_ID,
+                        callback: (resp) => handleAuth(`${API_BASE}/google-login`, { token: resp.credential })
+                    });
+                } else setTimeout(initGoogle, 200);
+            };
+
+            const handleAuth = async (url, body) => {
+                try {
+                    const res = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    const data = await res.json();
+                    if (data.token) {
+                        localStorage.setItem('tm_session', JSON.stringify(data));
+                        setIsLoggedIn(true);
+                        setUser(data.user);
+                        refreshData(data.token);
+                    } else alert(data.detail || "Auth failed");
+                } catch (e) { alert("Connection error"); }
+            };
+
+            const handleLogout = () => {
+                localStorage.removeItem('tm_session');
+                setIsLoggedIn(false);
+                window.location.reload();
+            };
+
+            const refreshData = async (token) => {
+                const headers = { 'Authorization': `Bearer ${token}` };
+                try {
+                    const [l, t] = await Promise.all([
+                        fetch(`${API_BASE}/logs`, { headers }).then(r => r.json()),
+                        fetch(`${API_BASE}/tracker/entries`, { headers }).then(r => r.json())
+                    ]);
+                    if (Array.isArray(l)) setLogs(l);
+                    if (Array.isArray(t)) setTrackerEntries(t);
+                } catch (e) { console.error(e); }
+                setLoading(false);
+            };
+
+            const sendTask = async (agentId, type, payload = {}) => {
+                const session = JSON.parse(localStorage.getItem('tm_session'));
+                try {
+                    await fetch(`${API_BASE}/task`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.token}` },
+                        body: JSON.stringify({ agent_role: agentId, task_type: type, payload })
+                    });
+                    refreshData(session.token);
+                } catch (e) { alert("Task failed"); }
+            };
+
+            const handleChatChange = (e) => {
+                const val = e.target.value;
+                setChatMessage(val);
+                
+                // Auto height adjustment
+                if (textareaRef.current) {
+                    textareaRef.current.style.height = 'auto';
+                    textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+                }
+
+                const lastAt = val.lastIndexOf("@");
+                if (lastAt !== -1 && lastAt === val.length - 1) {
+                    setShowSuggestions(true);
+                    setFilteredAgents(AGENT_LIST);
+                } else if (lastAt !== -1 && lastAt < val.length - 1) {
+                    const query = val.slice(lastAt + 1).toLowerCase();
+                    const filtered = AGENT_LIST.filter(a => a.name.toLowerCase().includes(query) || a.id.toLowerCase().includes(query));
+                    setFilteredAgents(filtered);
+                    setShowSuggestions(filtered.length > 0);
+                } else {
+                    setShowSuggestions(false);
+                }
+            };
+
+            const selectAgent = (agent) => {
+                const lastAt = chatMessage.lastIndexOf("@");
+                const newVal = chatMessage.slice(0, lastAt) + "@" + agent.id + " ";
+                setChatMessage(newVal);
+                setShowSuggestions(false);
+                setSelectedAgent(agent);
+                if (textareaRef.current) textareaRef.current.focus();
+            };
+
+            const handleChatSubmit = (e) => {
+                if (e) e.preventDefault();
+                if (!chatMessage.trim()) return;
+                
+                let targetId = selectedAgent?.id || "server_agent";
+                let cleanMessage = chatMessage;
+
+                const match = chatMessage.match(/@(\w+)/);
+                if (match) {
+                    const mentionedId = match[1];
+                    const agentExists = AGENT_LIST.find(a => a.id === mentionedId);
+                    if (agentExists) {
+                        targetId = mentionedId;
+                        cleanMessage = chatMessage.replace(`@${mentionedId}`, "").trim();
+                    }
+                }
+
+                sendTask(targetId, "manual_command", { command: cleanMessage });
+                setChatMessage("");
+                setShowSuggestions(false);
+                if (textareaRef.current) textareaRef.current.style.height = 'auto';
+            };
+
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleChatSubmit();
+                } else if(e.key === 'Escape') {
+                    setShowSuggestions(false);
+                }
+            };
+
+            if (loading) return <div className="h-screen bg-slate-900" />;
+
+            if (!isLoggedIn) {
+                return (
+                    <div className="flex items-center justify-center h-screen bg-slate-900 text-white">
+                        <div className="glass p-10 rounded-3xl border border-slate-800 text-center w-full max-w-md shadow-2xl">
+                            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand-500 to-indigo-600 flex items-center justify-center mx-auto mb-6 shadow-lg">
+                                <Cpu size={40} className="text-white" />
+                            </div>
+                            <h1 className="text-3xl font-bold mb-2">TrueMatrix Swarm</h1>
+                            <p className="text-slate-400 mb-8">AI Agent Organisation Management</p>
+                            <form onSubmit={(e) => { e.preventDefault(); handleAuth(`${API_BASE}/login`, { email: loginEmail, password: loginPassword }); }} className="space-y-4 text-left">
+                                <input type="email" placeholder="Work Email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-3 px-4 focus:border-brand-500 outline-none" required />
+                                <input type="password" placeholder="Password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-3 px-4 focus:border-brand-500 outline-none" required />
+                                <button type="submit" className="w-full bg-brand-500 hover:bg-brand-600 text-white font-bold py-4 rounded-2xl transition-all">Enter Dashboard</button>
+                                <div className="pt-4 border-t border-slate-800 mt-6 text-center">
+                                    <button type="button" onClick={() => window.google.accounts.id.prompt()} className="w-full flex items-center justify-center gap-3 bg-white text-slate-900 font-bold py-3 rounded-2xl transition-all hover:bg-slate-100">
+                                        Continue with Google
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex h-screen overflow-hidden">
+                    {/* Sidebar */}
+                    <div className="w-72 glass border-r border-slate-800 flex flex-col">
+                        <div className="p-6 border-b border-slate-800 flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-indigo-600 flex items-center justify-center">
+                                <Cpu size={18} className="text-white" />
+                            </div>
+                            <span className="font-bold text-lg tracking-tight">TrueMatrix Swarm</span>
+                        </div>
+                        <div className="p-4 space-y-1">
+                            <button onClick={() => { setView("swarm"); setSelectedAgent(null); }} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all ${view === 'swarm' && !selectedAgent ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-800/50'}`}>
+                                <Activity size={18} /> <span className="text-sm font-medium">Global Swarm</span>
+                            </button>
+                            <button onClick={() => setView("tracker")} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all ${view === 'tracker' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-800/50'}`}>
+                                <Construction size={18} /> <span className="text-sm font-medium">Tracker</span>
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 scrollbar-hide space-y-2">
+                            <div className="text-xs font-semibold text-slate-500 uppercase px-2 mb-2 tracking-wider">Agents</div>
+                            {AGENT_LIST.map(agent => (
+                                <button key={agent.id} onClick={() => { setSelectedAgent(agent); setView("swarm"); }} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all ${selectedAgent?.id === agent.id ? 'bg-brand-500/10 text-brand-500 border border-brand-500/20' : 'text-slate-400 hover:bg-slate-800/50'}`}>
+                                    <agent.icon size={18} className={selectedAgent?.id === agent.id ? 'text-brand-500' : agent.color} />
+                                    <span className="text-sm font-medium">{agent.name}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex-1 flex flex-col min-w-0">
+                        <header className="h-16 glass border-b border-slate-800 px-8 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm text-slate-400">
+                                <span>{view === "swarm" ? "Swarm Engine" : "Tracker"}</span>
+                                <ChevronRight size={14} />
+                                <span className="text-slate-200 font-medium">{selectedAgent?.name || "Global"}</span>
+                            </div>
+                            <div className="flex items-center gap-4">
+                                <div className="avatar w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center font-bold text-xs uppercase">{user?.name[0]}</div>
+                                <button onClick={handleLogout} className="p-2 text-red-400 hover:text-red-300 ml-2"><LogOut size={20} /></button>
+                            </div>
+                        </header>
+
+                        <div className="flex-1 overflow-y-auto p-8 space-y-6">
+                            {view === "swarm" ? (
+                                <div className="grid grid-cols-3 gap-6 h-[calc(100vh-160px)]">
+                                    <div className="col-span-2 glass rounded-2xl border border-slate-800 flex flex-col overflow-hidden">
+                                        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+                                            <span className="font-semibold flex items-center gap-2 text-sm uppercase tracking-wider text-slate-400"><Terminal size={16}/> Live stream</span>
+                                            <div className="flex items-center gap-2 px-2 py-1 rounded bg-brand-500/10 border border-brand-500/20 text-brand-500 text-[10px] font-bold uppercase tracking-widest">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-brand-500 animate-pulse" /> Live
+                                            </div>
+                                        </div>
+                                        <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-3 scrollbar-hide" ref={scrollRef}>
+                                            {logs.length === 0 && <div className="text-slate-600 text-center mt-20 italic">Waiting for swarm activity...</div>}
+                                            {logs.map((log, i) => (
+                                                <div key={i} className={`p-3 rounded-lg border transition-colors ${log.status === 'info' ? 'bg-brand-500/5 border-brand-500/20' : 'bg-slate-900/50 border-slate-800/50 hover:border-slate-700'}`}>
+                                                    <div className="flex items-center justify-between mb-1">
+                                                        <span className={`${log.status === 'info' ? 'text-accent' : 'text-brand-500'} font-bold`}>[{log.agent_role?.toUpperCase()}]</span>
+                                                        <span className="text-[10px] text-slate-600">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                                    </div>
+                                                    <div className="text-slate-300 log-content">{log.action_taken}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="glass rounded-2xl border border-slate-800 flex flex-col p-4 relative">
+                                        <h3 className="font-bold mb-4 flex items-center gap-2 text-sm uppercase tracking-wider text-slate-400"><MessageSquare size={16}/> Dispatch</h3>
+                                        
+                                        {showSuggestions && (
+                                            <div className="absolute bottom-24 left-4 right-4 bg-slate-950 border border-slate-800 rounded-xl shadow-2xl z-50 overflow-hidden max-h-60 overflow-y-auto">
+                                                <div className="p-2 border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900">Select Agent</div>
+                                                {filteredAgents.map(agent => (
+                                                    <button key={agent.id} onClick={() => selectAgent(agent)} className="w-full text-left px-4 py-3 text-xs flex items-center gap-3 transition-all suggestion-item border-b border-white/5 last:border-0">
+                                                        <agent.icon size={14} className={agent.color} />
+                                                        <span className="font-medium">{agent.name}</span>
+                                                        <span className="text-[10px] text-slate-600 ml-auto font-mono">@{agent.id}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        <div className="flex-1 text-slate-500 text-xs italic p-2 space-y-2">
+                                            <p>Type @ to mention a specific agent.</p>
+                                            <p>Shift + Enter for new line.</p>
+                                            <p>Agents will now respond directly here.</p>
+                                        </div>
+
+                                        <form onSubmit={handleChatSubmit} className="mt-auto relative">
+                                            <textarea 
+                                                ref={textareaRef}
+                                                rows="1"
+                                                value={chatMessage} 
+                                                onChange={handleChatChange} 
+                                                onKeyDown={handleKeyDown}
+                                                placeholder={selectedAgent ? `Message @${selectedAgent.id}...` : "Dispatch global command..."} 
+                                                className="w-full bg-slate-950 border border-slate-700 rounded-2xl pl-4 pr-12 py-4 text-sm outline-none focus:border-brand-500 transition-all shadow-inner auto-height scrollbar-hide" 
+                                            />
+                                            <button type="submit" className="absolute right-3 bottom-3 p-2 bg-brand-500 text-white rounded-xl hover:bg-brand-600 transition-all shadow-lg shadow-brand-500/20">
+                                                <ChevronRight size={18}/>
+                                            </button>
+                                        </form>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 gap-4">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h2 className="text-xl font-bold uppercase tracking-tight text-slate-400">Development Tracker</h2>
+                                        <span className="text-[10px] font-mono text-slate-600">TOTAL_ENTRIES: {trackerEntries.length}</span>
+                                    </div>
+                                    {trackerEntries.map(entry => (
+                                        <div key={entry.id} className="glass rounded-2xl border border-slate-800 p-5 flex items-start gap-4 hover:border-slate-700 transition-all">
+                                            <div className="p-3 rounded-xl bg-brand-500/10 text-brand-500"><Construction size={24}/></div>
+                                            <div className="flex-1">
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <div className="font-bold text-lg">{entry.title}</div>
+                                                    <span className={`text-[10px] px-2 py-0.5 rounded border ${entry.status === 'open' ? 'text-amber-500 border-amber-500/20 bg-amber-500/5' : 'text-emerald-500 border-emerald-500/20 bg-emerald-500/5'} uppercase font-bold`}>{entry.status}</span>
+                                                </div>
+                                                <p className="text-slate-400 text-sm mb-3">{entry.description}</p>
+                                                <div className="flex items-center gap-4 text-[10px] text-slate-600 font-mono">
+                                                    <span>AGENT: {entry.agent_id}</span>
+                                                    <span>PRIORITY: P{entry.priority}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</body>
+</html>

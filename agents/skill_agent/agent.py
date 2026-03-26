@@ -3,6 +3,7 @@ import os
 import logging
 import json
 from typing import Any
+from pathlib import Path
 
 # Append project root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -32,8 +33,15 @@ class SkillAgent(BaseAgent):
             return self._create_agent_skill(task_data)
         elif task_type == "bootstrap_agent_skills":
             return self._bootstrap_agent_skills(task_data)
+        elif task_type == "train_mcp_autonomy":
+            return self._train_mcp_autonomy(task_data)
         else:
             return super().handle_task(task_data)
+
+    def _normalize_target_agent(self, target_agent: str | None) -> str:
+        if not target_agent:
+            return "integration_agent"
+        return "integration_agent" if target_agent == "integrator_agent" else target_agent
 
     def _fetch_best_practices(self, task_data):
         topic = task_data.get("task", {}).get("topic")
@@ -78,7 +86,7 @@ class SkillAgent(BaseAgent):
 
     def _create_agent_skill(self, task_data):
         task = task_data.get("task", {})
-        target_agent = task.get("target_agent")
+        target_agent = self._normalize_target_agent(task.get("target_agent"))
         sync_train = bool(task.get("sync_train", True))
         if not target_agent:
             return {"status": "error", "message": "target_agent is required"}
@@ -181,6 +189,64 @@ class SkillAgent(BaseAgent):
                 "failure_count": failure_count,
             },
             "results": results,
+        }
+
+    def _train_mcp_autonomy(self, task_data):
+        task = task_data.get("task", {})
+        target_agent = self._normalize_target_agent(task.get("target_agent"))
+        sync_train = bool(task.get("sync_train", True))
+
+        spec = get_agent_spec(target_agent)
+        if not spec:
+            return {"status": "error", "message": f"Unknown target_agent: {target_agent}"}
+
+        playbook_path = Path(__file__).resolve().parents[2] / "docs" / "training" / "mcp_autonomy_playbook.md"
+        if not playbook_path.exists():
+            return {"status": "error", "message": f"Missing MCP autonomy playbook: {playbook_path}"}
+
+        mcp_content = playbook_path.read_text(encoding="utf-8")
+        combined = (
+            self._build_skill_pack(spec)
+            + "\n\n"
+            + mcp_content
+        )
+
+        training_payload = {
+            "type": "train_agent",
+            "target_agent": target_agent,
+            "knowledge_content": combined,
+            "source": f"MCP autonomy playbook for {target_agent}",
+        }
+
+        if sync_train:
+            from agents.training_agent.agent import TrainingAgent
+
+            training_result = self.spawn_subagent(TrainingAgent, {"task": training_payload})
+            ok = isinstance(training_result, dict) and training_result.get("status") == "success"
+            self.log_execution(
+                task=task_data,
+                thought_process=f"Built MCP autonomy training pack for {target_agent}.",
+                action_taken=f"Synchronous MCP autonomy training {'succeeded' if ok else 'returned non-success'} for {target_agent}.",
+                status="success" if ok else "warning",
+            )
+            return {
+                "status": "success" if ok else "error",
+                "target_agent": target_agent,
+                "sync_train": True,
+                "training_result": training_result,
+            }
+
+        dispatched_task_id = self.publish_task_to_agent("training_agent", training_payload)
+        self.log_execution(
+            task=task_data,
+            thought_process=f"Built MCP autonomy training pack for {target_agent}.",
+            action_taken=f"Dispatched MCP autonomy payload to training_agent ({dispatched_task_id}).",
+        )
+        return {
+            "status": "success",
+            "target_agent": target_agent,
+            "sync_train": False,
+            "dispatched_task_id": dispatched_task_id,
         }
 
     def _build_skill_pack(self, spec: AgentSpec) -> str:

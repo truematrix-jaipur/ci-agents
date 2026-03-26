@@ -60,6 +60,18 @@ _AGENT_SPECS: tuple[AgentSpec, ...] = (
         smoke_task={"task": {"type": "check_stock_levels", "sku": "health-sku"}},
     ),
     AgentSpec(
+        role="integrator_agent",
+        module_path="agents.integration_agent.agent",
+        class_name="IntegrationAgent",
+        capabilities=("woocommerce_sync", "stock_check", "erp_bridge"),
+        deprecated=True,
+        alias_of="integration_agent",
+        required_env=("WC_URL", "WC_INDOGENMED_CK", "WC_INDOGENMED_CS"),
+        required_mcps=("wordpress-indogenmed", "erpnext-igmhealth"),
+        permission_profile=("network:https_woocommerce", "network:https_erpnext"),
+        smoke_task={"task": {"type": "check_stock_levels", "sku": "health-sku"}},
+    ),
+    AgentSpec(
         role="erpnext_agent",
         module_path="agents.erpnext_agent.agent",
         class_name="ERPNextAgent",

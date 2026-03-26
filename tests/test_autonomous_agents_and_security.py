@@ -153,6 +153,60 @@ def test_data_analyser_autonomous_sales_monitor_delegates_on_drop(base_stubs, mo
     assert delegated["role"] == "growth_agent"
 
 
+def test_growth_agent_closed_loop_sync(base_stubs, monkeypatch):
+    from agents.growth_agent.agent import GrowthAgent
+
+    agent = _mk_agent(GrowthAgent)
+
+    def _spawn(self, cls, payload):
+        role = getattr(cls, "AGENT_ROLE", "")
+        if role == "data_analyser":
+            return {
+                "status": "success",
+                "trend": {"percent_change": -12.0, "direction": "down"},
+                "totals": {"revenue": 1000, "orders": 20},
+            }
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "get_ga4_summary":
+            return {"status": "success", "ga4": {"sessions": 2000, "conversions": 20}}
+        if role == "campaign_planner_agent":
+            return {"status": "success", "message": "Campaign plan dispatched."}
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "run_autonomous_pipeline":
+            return {"status": "success", "message": "Autonomous SEO pipeline triggered."}
+        if role == "fb_campaign_manager":
+            return {"status": "success", "action": "Increased bid for performance."}
+        return {"status": "error", "message": "unexpected"}
+
+    monkeypatch.setattr(GrowthAgent, "spawn_subagent", _spawn, raising=False)
+    res = agent.handle_task(
+        {"task": {"type": "plan_quarterly_growth", "execution_mode": "sync", "window_days": 30, "total_budget": 9000}}
+    )
+    assert res["status"] in {"success", "warning"}
+    assert res["mode"] == "sync"
+    assert "plan" in res
+    assert "execution" in res
+    assert res["plan"]["budget"]["total_budget"] == 9000.0
+
+
+def test_growth_agent_closed_loop_async_dispatch(base_stubs, monkeypatch):
+    from agents.growth_agent.agent import GrowthAgent
+
+    agent = _mk_agent(GrowthAgent)
+    dispatched = []
+
+    def _publish(self, role, payload):
+        dispatched.append((role, payload))
+        return f"tid-{len(dispatched)}"
+
+    monkeypatch.setattr(GrowthAgent, "publish_task_to_agent", _publish, raising=False)
+    res = agent.handle_task(
+        {"task": {"type": "plan_quarterly_growth", "execution_mode": "async", "window_days": 60, "total_budget": 12000}}
+    )
+    assert res["status"] == "success"
+    assert res["mode"] == "async"
+    assert len(dispatched) == 4
+    assert "campaign_plan_task_id" in res["dispatched"]
+
+
 def test_erpnext_customer_lookup_parameterized(base_stubs):
     from agents.erpnext_agent.agent import ERPNextAgent
 

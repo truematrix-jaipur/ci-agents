@@ -168,12 +168,18 @@ def test_growth_agent_closed_loop_sync(base_stubs, monkeypatch):
             }
         if role == "seo_agent" and payload.get("task", {}).get("type") == "get_ga4_summary":
             return {"status": "success", "ga4": {"sessions": 2000, "conversions": 20}}
+        if role == "google_agent":
+            return {"status": "success", "clicks": 1200, "impressions": 25000, "top_keywords": [{"query": "vitamin c"}]}
         if role == "campaign_planner_agent":
             return {"status": "success", "message": "Campaign plan dispatched."}
         if role == "seo_agent" and payload.get("task", {}).get("type") == "run_autonomous_pipeline":
             return {"status": "success", "message": "Autonomous SEO pipeline triggered."}
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "run_extended":
+            return {"status": "success", "details": "extended"}
         if role == "fb_campaign_manager":
             return {"status": "success", "action": "Increased bid for performance."}
+        if role == "skill_agent":
+            return {"status": "success", "message": "knowledge dispatched"}
         return {"status": "error", "message": "unexpected"}
 
     monkeypatch.setattr(GrowthAgent, "spawn_subagent", _spawn, raising=False)
@@ -203,8 +209,48 @@ def test_growth_agent_closed_loop_async_dispatch(base_stubs, monkeypatch):
     )
     assert res["status"] == "success"
     assert res["mode"] == "async"
-    assert len(dispatched) == 4
+    assert len(dispatched) == 5
     assert "campaign_plan_task_id" in res["dispatched"]
+
+
+def test_growth_agent_custom_csv_report_ingestion(base_stubs, tmp_path, monkeypatch):
+    from agents.growth_agent.agent import GrowthAgent
+
+    csv_file = tmp_path / "semrush_export.csv"
+    csv_file.write_text("keyword,traffic,position\nvitamin c,1200,4\nomega 3,800,7\n", encoding="utf-8")
+    agent = _mk_agent(GrowthAgent)
+
+    def _spawn(self, cls, payload):
+        role = getattr(cls, "AGENT_ROLE", "")
+        if role == "data_analyser":
+            return {"status": "success", "trend": {"percent_change": 3.5, "direction": "up"}, "totals": {"revenue": 2000}}
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "get_ga4_summary":
+            return {"status": "success", "ga4": {"sessions": 1500, "conversions": 35}}
+        if role == "google_agent":
+            return {"status": "success", "clicks": 900, "impressions": 20000, "top_keywords": [{"query": "zinc"}]}
+        if role == "campaign_planner_agent":
+            return {"status": "success"}
+        if role == "seo_agent":
+            return {"status": "success"}
+        if role == "fb_campaign_manager":
+            return {"status": "success"}
+        if role == "skill_agent":
+            return {"status": "success"}
+        return {"status": "success"}
+
+    monkeypatch.setattr(GrowthAgent, "spawn_subagent", _spawn, raising=False)
+    res = agent.handle_task(
+        {
+            "task": {
+                "type": "plan_quarterly_growth",
+                "execution_mode": "sync",
+                "custom_reports": [str(csv_file)],
+            }
+        }
+    )
+    assert res["status"] in {"success", "warning"}
+    assert res["inputs"]["external"]["reports"]
+    assert res["diagnosis"]["keyword_signals"]["top_keywords_count"] >= 1
 
 
 def test_erpnext_customer_lookup_parameterized(base_stubs):
@@ -295,7 +341,7 @@ def test_agent_handle_task_smoke(base_stubs, patch_subprocess, monkeypatch, modu
 
     result = agent.handle_task(task)
     assert isinstance(result, dict)
-    assert result.get("status") in {"success", "error"}
+    assert result.get("status") in {"success", "warning", "error"}
 
 
 def test_wordpress_implement_fix_dry_run_and_apply(base_stubs, tmp_path):

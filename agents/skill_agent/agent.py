@@ -35,6 +35,8 @@ class SkillAgent(BaseAgent):
             return self._bootstrap_agent_skills(task_data)
         elif task_type == "train_mcp_autonomy":
             return self._train_mcp_autonomy(task_data)
+        elif task_type == "bootstrap_mcp_autonomy":
+            return self._bootstrap_mcp_autonomy(task_data)
         else:
             return super().handle_task(task_data)
 
@@ -247,6 +249,62 @@ class SkillAgent(BaseAgent):
             "target_agent": target_agent,
             "sync_train": False,
             "dispatched_task_id": dispatched_task_id,
+        }
+
+    def _bootstrap_mcp_autonomy(self, task_data):
+        task = task_data.get("task", {})
+        include_deprecated = bool(task.get("include_deprecated", False))
+        sync_train = bool(task.get("sync_train", True))
+        explicit_agents = task.get("agents") or []
+
+        if explicit_agents and not isinstance(explicit_agents, list):
+            return {"status": "error", "message": "agents must be a list when provided"}
+
+        target_agents = [self._normalize_target_agent(a) for a in explicit_agents] if explicit_agents else [
+            s.role for s in get_agent_specs(include_deprecated=include_deprecated) if s.required_mcps
+        ]
+
+        results: list[dict[str, Any]] = []
+        success_count = 0
+        failure_count = 0
+
+        for role in target_agents:
+            result = self._train_mcp_autonomy(
+                {"task": {"type": "train_mcp_autonomy", "target_agent": role, "sync_train": sync_train}}
+            )
+            results.append(
+                {
+                    "target_agent": role,
+                    "status": result.get("status"),
+                    "message": result.get("message"),
+                    "training_result_status": (
+                        result.get("training_result", {}).get("status")
+                        if isinstance(result.get("training_result"), dict)
+                        else None
+                    ),
+                }
+            )
+            if result.get("status") == "success":
+                success_count += 1
+            else:
+                failure_count += 1
+
+        self.log_execution(
+            task=task_data,
+            thought_process="Applied MCP autonomy playbook training to MCP-dependent agents.",
+            action_taken=f"Completed MCP autonomy bootstrap for {len(target_agents)} agents: success={success_count}, failed={failure_count}.",
+            status="success" if failure_count == 0 else "warning",
+        )
+        return {
+            "status": "success" if failure_count == 0 else "warning",
+            "sync_train": sync_train,
+            "include_deprecated": include_deprecated,
+            "summary": {
+                "total_agents": len(target_agents),
+                "success_count": success_count,
+                "failure_count": failure_count,
+            },
+            "results": results,
         }
 
     def _build_skill_pack(self, spec: AgentSpec) -> str:

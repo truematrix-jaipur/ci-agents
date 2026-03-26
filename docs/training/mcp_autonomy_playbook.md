@@ -71,6 +71,58 @@ Operational adaptation:
   - local: `--redis-host 127.0.0.1 --redis-port 6379`
   - ERPNext: `--redis-host 172.18.0.10 --redis-port 6379`
 
+## Other MCP Training Modules
+
+### MySQL MCP
+- Validate endpoint first with `SELECT 1`.
+- Verify host/port/user/db are correct for each environment (`mysql-igm`, `mysql-erpnext`).
+- If DB connection fails, check socket vs TCP mismatch and firewall/bind-address.
+
+### ChromaDB MCP
+- Confirm service is reachable (`localhost:8000` in this stack).
+- Validate collection lifecycle:
+  - create/get collection,
+  - add/query sample vectors,
+  - verify persistence after restart.
+
+### Filesystem MCP
+- Keep allowed roots minimal and explicit.
+- Reject path traversal and absolute-path escapes outside allowed roots.
+- Validate read/write/list behavior on each mounted root.
+
+### Docker MCP
+- Confirm daemon socket access (`/var/run/docker.sock`).
+- Validate `projects`, `compose ps`, and healthcheck operations.
+- On failures, distinguish permission error vs missing compose project.
+
+### Playwright MCP
+- Verify browser binaries and headless flags are compatible with host.
+- If startup fails, check cached browser path and sandbox flags.
+- Validate at least one navigation + snapshot operation.
+
+### Fetch MCP
+- Validate outbound network and DNS reachability.
+- Differentiate transport failures from target-site blocking/429.
+- Apply domain filters for high-risk or compliance-sensitive workflows.
+
+### GitHub MCP
+- Validate PAT scope for repo operations before PR/issue automation.
+- Distinguish auth errors (401/403) from repository/path errors (404).
+
+### WordPress MCP
+- Confirm WP REST and WooCommerce REST credentials separately.
+- Validate with a low-risk read endpoint before any write operation.
+- Include rollback plan before content/config mutations.
+
+### ERPNext MCP
+- Validate auth (`key:secret`) and site URL first.
+- Use lightweight read probes before write/create doc flows.
+- Log docnames/IDs for traceable recovery.
+
+### OpenAI Docs MCP (URL-based)
+- Handle URL-based MCP entries without `command`.
+- Skip local initialize checks and validate via fetch/query usage.
+
 ## Autonomous Debug Routine
 1. Capture exact failing server names and error string.
 2. Verify current config entry and command path.

@@ -17,11 +17,21 @@ def main() -> int:
     parser.add_argument("--include-deprecated", action="store_true", help="Include deprecated roles from catalog.")
     parser.add_argument("--async-dispatch", action="store_true", help="Dispatch to training_agent queue instead of sync training.")
     parser.add_argument("--mcp-autonomy", action="store_true", help="Train MCP onboarding/config/debug autonomy playbook.")
+    parser.add_argument("--mcp-autonomy-all", action="store_true", help="Train MCP autonomy playbook for all MCP-dependent agents.")
     parser.add_argument("--output", default="/home/agents/logs/agent_skill_bootstrap_report.json", help="Output report path.")
     args = parser.parse_args()
 
     skill_agent = SkillAgent()
-    if args.mcp_autonomy:
+    if args.mcp_autonomy_all:
+        task = {
+            "task": {
+                "type": "bootstrap_mcp_autonomy",
+                "agents": args.agent,
+                "include_deprecated": args.include_deprecated,
+                "sync_train": not args.async_dispatch,
+            }
+        }
+    elif args.mcp_autonomy:
         task = {
             "task": {
                 "type": "train_mcp_autonomy",

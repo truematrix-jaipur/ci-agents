@@ -140,22 +140,45 @@ def check_agent_runtime_requirements() -> dict[str, Any]:
     This supplements external connectivity checks without affecting preflight summary counts.
     """
     per_agent = []
+    mcp_servers = _load_configured_mcp_servers()
     missing_total = 0
     for spec in get_agent_specs(include_deprecated=False):
         missing_env = [name for name in spec.required_env if not (os.getenv(name) or "").strip()]
         missing_bins = [name for name in spec.required_binaries if shutil.which(name) is None]
-        missing_total += len(missing_env) + len(missing_bins)
+        missing_mcps = [name for name in spec.required_mcps if name not in mcp_servers]
+        missing_total += len(missing_env) + len(missing_bins) + len(missing_mcps)
         per_agent.append(
             {
                 "role": spec.role,
-                "ok": not (missing_env or missing_bins),
+                "ok": not (missing_env or missing_bins or missing_mcps),
                 "missing_env": missing_env,
                 "missing_binaries": missing_bins,
+                "missing_mcps": missing_mcps,
+                "permission_profile": list(spec.permission_profile),
             }
         )
     return {
         "ok": missing_total == 0,
         "total_agents": len(per_agent),
         "agents_with_missing_requirements": sum(1 for a in per_agent if not a["ok"]),
+        "configured_mcps": sorted(mcp_servers),
         "agents": per_agent,
     }
+
+
+def _load_configured_mcp_servers() -> set[str]:
+    """
+    Reads local MCP server declarations from unified MCP JSON config.
+    """
+    config_path = os.getenv("MCP_UNIFIED_CONFIG_PATH", "/home/mcp/unified_mcp_config.json")
+    p = Path(config_path)
+    if not p.exists():
+        return set()
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    servers = payload.get("mcpServers", {})
+    if isinstance(servers, dict):
+        return set(servers.keys())
+    return set()

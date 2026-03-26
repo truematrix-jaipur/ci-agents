@@ -66,16 +66,20 @@ def _check_env_capabilities():
         return bool((os.getenv(name) or "").strip())
 
     per_agent_requirements = []
+    configured_mcps = _load_configured_mcps()
     specs = get_agent_specs(include_deprecated=INCLUDE_DEPRECATED)
     for spec in specs:
         missing_env = [name for name in spec.required_env if not _present(name)]
         missing_bins = [name for name in spec.required_binaries if not shutil.which(name)]
+        missing_mcps = [name for name in spec.required_mcps if name not in configured_mcps]
         per_agent_requirements.append(
             {
                 "role": spec.role,
-                "ok": not (missing_env or missing_bins),
+                "ok": not (missing_env or missing_bins or missing_mcps),
                 "missing_env": missing_env,
                 "missing_binaries": missing_bins,
+                "missing_mcps": missing_mcps,
+                "permission_profile": list(spec.permission_profile),
             }
         )
 
@@ -91,8 +95,23 @@ def _check_env_capabilities():
                 os.getenv("GSC_SERVICE_ACCOUNT_FILE", "/home/agents/agents/seo_agent/credentials/gsc_service_account.json")
             ).exists(),
         },
+        "configured_mcps": sorted(configured_mcps),
         "agent_requirements": per_agent_requirements,
     }
+
+
+def _load_configured_mcps() -> set[str]:
+    p = Path(os.getenv("MCP_UNIFIED_CONFIG_PATH", "/home/mcp/unified_mcp_config.json"))
+    if not p.exists():
+        return set()
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    servers = payload.get("mcpServers", {})
+    if isinstance(servers, dict):
+        return set(servers.keys())
+    return set()
 
 
 def _healthcheck_agent(module_path, class_name, smoke_task):

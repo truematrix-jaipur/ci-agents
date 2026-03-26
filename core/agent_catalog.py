@@ -85,10 +85,18 @@ _AGENT_SPECS: tuple[AgentSpec, ...] = (
         role="erpnext_dev_agent",
         module_path="agents.erpnext_dev_agent.agent",
         class_name="ERPNextDevAgent",
-        capabilities=("doctype_creation", "erp_fix_delegation"),
+        capabilities=(
+            "doctype_creation",
+            "erp_fix_delegation",
+            "bench_release_planning",
+            "bench_release_execution",
+            "bench_rollback_workflow",
+            "multi_site_release_orchestration",
+        ),
         required_env=("ERP_URL", "ERP_API_KEY", "ERP_API_SECRET"),
         required_mcps=("erpnext-igmhealth", "docker", "filesystem"),
-        permission_profile=("network:https_erpnext", "process:ops_delegate"),
+        required_binaries=("docker", "systemctl"),
+        permission_profile=("network:https_erpnext", "process:ops_delegate", "process:bench_lifecycle"),
     ),
     # Canonical runtime ops owner.
     AgentSpec(

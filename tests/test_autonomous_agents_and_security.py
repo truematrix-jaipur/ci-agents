@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import builtins
+import json
 
 import pytest
 
@@ -264,6 +265,72 @@ def test_erpnext_customer_lookup_parameterized(base_stubs):
     q, params = conn.cursor_obj.executed[0]
     assert "%s" in q
     assert params == ("a@b.com",)
+
+
+def test_erpnext_dev_plan_release(base_stubs):
+    from agents.erpnext_dev_agent.agent import ERPNextDevAgent
+
+    agent = _mk_agent(ERPNextDevAgent)
+    agent.bench_path = "/home/erpnext/frappe_docker"
+    agent.logs_dir = Path("/tmp")
+    res = agent.handle_task(
+        {
+            "task": {
+                "type": "plan_release",
+                "sites": ["erp.igmhealth.com", "erp2.igmhealth.com"],
+                "apps": ["igm_custom"],
+                "patches": ["igm_custom.patches.execute_patch"],
+            }
+        }
+    )
+    assert res["status"] == "success"
+    plan = res["release_plan"]
+    assert "migrate_sites" in [s["name"] for s in plan["steps"]]
+    assert plan["sites"] == ["erp.igmhealth.com", "erp2.igmhealth.com"]
+
+
+def test_erpnext_dev_execute_release_dry_run(base_stubs):
+    from agents.erpnext_dev_agent.agent import ERPNextDevAgent
+
+    agent = _mk_agent(ERPNextDevAgent)
+    agent.bench_path = "/home/erpnext/frappe_docker"
+    agent.logs_dir = Path("/tmp")
+    res = agent.handle_task(
+        {"task": {"type": "execute_release", "sites": ["erp.igmhealth.com"], "apps": ["igm_custom"], "dry_run": True}}
+    )
+    assert res["status"] == "success"
+    assert res["dry_run"] is True
+    assert "run_log_path" in res
+
+
+def test_erpnext_dev_rollback_plan_and_execute(base_stubs, tmp_path, monkeypatch):
+    from agents.erpnext_dev_agent.agent import ERPNextDevAgent
+
+    run_id = "20260326_000001"
+    run_log = tmp_path / f"release_run_{run_id}.json"
+    run_log.write_text(
+        json.dumps({"plan": {"sites": ["erp.igmhealth.com"], "apps": ["igm_custom"]}}, indent=2),
+        encoding="utf-8",
+    )
+
+    agent = _mk_agent(ERPNextDevAgent)
+    agent.bench_path = "/home/erpnext/frappe_docker"
+    agent.logs_dir = tmp_path
+
+    # Dry-run rollback plan
+    plan_res = agent.handle_task({"task": {"type": "rollback_release", "run_id": run_id}})
+    assert plan_res["status"] == "success"
+    assert "rollback_plan" in plan_res
+
+    # Execute rollback
+    monkeypatch.setattr(
+        ERPNextDevAgent,
+        "_run_host_cmd",
+        lambda self, cmd, timeout=180: {"command": cmd, "returncode": 0, "stdout": "", "stderr": ""},
+        raising=False,
+    )
+    exec_res = agent.handle_task({"task": {"type": "rollback_release", "run_id": run_id, "execute": True}})
+    assert exec_res["status"] == "success"
 
 
 def test_notifier_uses_signed_token_links(monkeypatch):

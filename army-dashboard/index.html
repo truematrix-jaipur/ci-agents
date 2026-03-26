@@ -81,6 +81,7 @@
             const scrollRef = useRef(null);
             const textareaRef = useRef(null);
             const chatEventsRef = useRef(new Set());
+            const authFailureHandledRef = useRef(false);
 
             useEffect(() => {
                 const saved = localStorage.getItem('tm_session');
@@ -107,6 +108,32 @@
                 initGoogle();
             }, []);
 
+            const getSession = () => {
+                try {
+                    const raw = localStorage.getItem('tm_session');
+                    if (!raw) return null;
+                    const parsed = JSON.parse(raw);
+                    if (!parsed?.token) return null;
+                    return parsed;
+                } catch (e) {
+                    return null;
+                }
+            };
+
+            const clearSessionState = () => {
+                localStorage.removeItem('tm_session');
+                localStorage.removeItem(CHAT_STATE_KEY);
+                setIsLoggedIn(false);
+                setUser(null);
+            };
+
+            const handleAuthFailure = (reason = "Session expired. Please login again.") => {
+                if (authFailureHandledRef.current) return;
+                authFailureHandledRef.current = true;
+                appendSystemEvent(reason, "error");
+                clearSessionState();
+            };
+
             const initGoogle = () => {
                 if (window.google) {
                     window.google.accounts.id.initialize({
@@ -125,6 +152,7 @@
                     });
                     const data = await res.json();
                     if (data.token) {
+                        authFailureHandledRef.current = false;
                         localStorage.setItem('tm_session', JSON.stringify(data));
                         setIsLoggedIn(true);
                         setUser(data.user);
@@ -144,10 +172,19 @@
             const refreshData = async (token) => {
                 const headers = { 'Authorization': `Bearer ${token}` };
                 try {
-                    const [l, t] = await Promise.all([
-                        fetch(`${API_BASE}/logs`, { headers }).then(r => r.json()),
-                        fetch(`${API_BASE}/tracker/entries`, { headers }).then(r => r.json())
+                    const [lRes, tRes] = await Promise.all([
+                        fetch(`${API_BASE}/logs`, { headers }),
+                        fetch(`${API_BASE}/tracker/entries`, { headers })
                     ]);
+                    if (lRes.status === 401 || tRes.status === 401) {
+                        const detail = (await lRes.json().catch(() => ({}))).detail
+                            || (await tRes.json().catch(() => ({}))).detail
+                            || "Session expired. Please login again.";
+                        handleAuthFailure(detail);
+                        setLoading(false);
+                        return;
+                    }
+                    const [l, t] = await Promise.all([lRes.json(), tRes.json()]);
                     if (Array.isArray(l)) setLogs(l);
                     if (Array.isArray(t)) setTrackerEntries(t);
                 } catch (e) { console.error(e); }
@@ -167,7 +204,11 @@
             };
 
             const sendTask = async (agentId, type, payload = {}) => {
-                const session = JSON.parse(localStorage.getItem('tm_session'));
+                const session = getSession();
+                if (!session?.token) {
+                    handleAuthFailure("Missing session token. Please login again.");
+                    return null;
+                }
                 try {
                     const res = await fetch(`${API_BASE}/task`, {
                         method: 'POST',
@@ -175,6 +216,10 @@
                         body: JSON.stringify({ agent_role: agentId, task_type: type, payload })
                     });
                     const data = await res.json();
+                    if (res.status === 401) {
+                        handleAuthFailure(data?.detail || "Session expired. Please login again.");
+                        return null;
+                    }
                     if (!res.ok) {
                         throw new Error(data?.detail || `Task dispatch failed (${res.status})`);
                     }
@@ -216,13 +261,17 @@
             }, [chatEvents]);
 
             const fetchTaskEvents = async (taskId) => {
-                const session = JSON.parse(localStorage.getItem('tm_session'));
+                const session = getSession();
                 if (!session?.token || !taskId) return;
                 try {
                     const res = await fetch(`${API_BASE}/task/${taskId}/events?limit=300`, {
                         headers: { 'Authorization': `Bearer ${session.token}` }
                     });
                     const data = await res.json();
+                    if (res.status === 401) {
+                        handleAuthFailure(data?.detail || "Session expired. Please login again.");
+                        return;
+                    }
                     if (!res.ok) {
                         throw new Error(data?.detail || `Task events fetch failed (${res.status})`);
                     }
@@ -241,6 +290,10 @@
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
                     const data = await res.json();
+                    if (res.status === 401) {
+                        handleAuthFailure(data?.detail || "Session expired. Please login again.");
+                        return;
+                    }
                     if (!res.ok) {
                         throw new Error(data?.detail || `Chat events fetch failed (${res.status})`);
                     }
@@ -261,7 +314,7 @@
             }, [activeTasks]);
 
             useEffect(() => {
-                const session = JSON.parse(localStorage.getItem('tm_session'));
+                const session = getSession();
                 if (!session?.token) return;
                 const interval = setInterval(() => fetchChatEvents(session.token), 3000);
                 return () => clearInterval(interval);

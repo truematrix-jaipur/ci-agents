@@ -8,7 +8,7 @@ import sys
 import uuid
 import datetime
 import threading
-from jose import jwt, JWTError
+from jose import jwt, JWTError, ExpiredSignatureError
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -95,6 +95,8 @@ async def get_current_user(request: Request):
     try:
         payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
         return payload
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 

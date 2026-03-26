@@ -154,6 +154,18 @@
                 setLoading(false);
             };
 
+            const appendSystemEvent = (message, status = "error", payload = {}) => {
+                mergeChatEvents([{
+                    timestamp: new Date().toISOString(),
+                    task_id: "",
+                    agent_role: "system",
+                    event_type: "ui_notice",
+                    status,
+                    message,
+                    payload
+                }]);
+            };
+
             const sendTask = async (agentId, type, payload = {}) => {
                 const session = JSON.parse(localStorage.getItem('tm_session'));
                 try {
@@ -163,9 +175,14 @@
                         body: JSON.stringify({ agent_role: agentId, task_type: type, payload })
                     });
                     const data = await res.json();
+                    if (!res.ok) {
+                        throw new Error(data?.detail || `Task dispatch failed (${res.status})`);
+                    }
                     refreshData(session.token);
                     return data;
-                } catch (e) { alert("Task failed"); }
+                } catch (e) {
+                    appendSystemEvent(`Dispatch failed: ${e.message || "unknown error"}`, "error", { agentId, type });
+                }
                 return null;
             };
 
@@ -193,6 +210,11 @@
                 }));
             }, [chatEvents, activeTasks]);
 
+            useEffect(() => {
+                const el = scrollRef.current;
+                if (el) el.scrollTop = el.scrollHeight;
+            }, [chatEvents]);
+
             const fetchTaskEvents = async (taskId) => {
                 const session = JSON.parse(localStorage.getItem('tm_session'));
                 if (!session?.token || !taskId) return;
@@ -201,11 +223,14 @@
                         headers: { 'Authorization': `Bearer ${session.token}` }
                     });
                     const data = await res.json();
+                    if (!res.ok) {
+                        throw new Error(data?.detail || `Task events fetch failed (${res.status})`);
+                    }
                     if (Array.isArray(data?.events)) {
                         mergeChatEvents(data.events);
                     }
                 } catch (e) {
-                    console.error("task events fetch failed", e);
+                    appendSystemEvent(`Task stream error (${taskId.slice(0, 8)}): ${e.message || "unknown error"}`, "error", { taskId });
                 }
             };
 
@@ -216,11 +241,14 @@
                         headers: { 'Authorization': `Bearer ${token}` }
                     });
                     const data = await res.json();
+                    if (!res.ok) {
+                        throw new Error(data?.detail || `Chat events fetch failed (${res.status})`);
+                    }
                     if (Array.isArray(data?.events)) {
                         mergeChatEvents(data.events);
                     }
                 } catch (e) {
-                    console.error("chat events fetch failed", e);
+                    appendSystemEvent(`Chat sync error: ${e.message || "unknown error"}`, "error");
                 }
             };
 
@@ -231,6 +259,13 @@
                 }, 1500);
                 return () => clearInterval(interval);
             }, [activeTasks]);
+
+            useEffect(() => {
+                const session = JSON.parse(localStorage.getItem('tm_session'));
+                if (!session?.token) return;
+                const interval = setInterval(() => fetchChatEvents(session.token), 3000);
+                return () => clearInterval(interval);
+            }, [isLoggedIn]);
 
             const handleChatChange = (e) => {
                 const val = e.target.value;
@@ -296,6 +331,7 @@
 
                 const dispatchResult = await sendTask(targetId, "manual_command", { command: cleanMessage });
                 if (dispatchResult?.task_id) {
+                    appendSystemEvent(`Task sent to ${targetId} (${dispatchResult.task_id.slice(0, 8)})`, "info", { task_id: dispatchResult.task_id });
                     setActiveTasks((prev) => Array.from(new Set([dispatchResult.task_id, ...prev])).slice(0, 25));
                     fetchTaskEvents(dispatchResult.task_id);
                 }

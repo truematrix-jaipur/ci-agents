@@ -10,6 +10,7 @@ These instructions apply whenever Codex works in this directory tree.
 1. Start by checking repository state:
    - `git status --short`
    - `git branch --show-current`
+   - `git pull --rebase` (or `git pull` if rebasing is not appropriate for the branch)
 
 2. Never commit directly to `main`/`master`.
    - Create or use a task branch for every change.
@@ -40,6 +41,10 @@ These instructions apply whenever Codex works in this directory tree.
    - Summary of modified files.
    - Risks/assumptions.
    - Commands used for validation.
+
+10. Push changes after each completed change set.
+   - After commit(s) and validation, run `git push` to keep remote in sync.
+   - If push fails, resolve and retry before considering the task fully complete.
 
 ## Safety
 

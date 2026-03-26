@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 from config.settings import config
+from core.agent_catalog import get_agent_specs
 
 
 def _ok(detail: str, remediation: str = "") -> dict[str, Any]:
@@ -128,4 +130,32 @@ def run_preflight_diagnostics() -> dict[str, Any]:
             "total_checks": len(checks),
         },
         "checks": checks,
+        "agent_runtime_readiness": check_agent_runtime_requirements(),
+    }
+
+
+def check_agent_runtime_requirements() -> dict[str, Any]:
+    """
+    Audits static runtime requirements (env vars + binaries) per canonical agent.
+    This supplements external connectivity checks without affecting preflight summary counts.
+    """
+    per_agent = []
+    missing_total = 0
+    for spec in get_agent_specs(include_deprecated=False):
+        missing_env = [name for name in spec.required_env if not (os.getenv(name) or "").strip()]
+        missing_bins = [name for name in spec.required_binaries if shutil.which(name) is None]
+        missing_total += len(missing_env) + len(missing_bins)
+        per_agent.append(
+            {
+                "role": spec.role,
+                "ok": not (missing_env or missing_bins),
+                "missing_env": missing_env,
+                "missing_binaries": missing_bins,
+            }
+        )
+    return {
+        "ok": missing_total == 0,
+        "total_agents": len(per_agent),
+        "agents_with_missing_requirements": sum(1 for a in per_agent if not a["ok"]),
+        "agents": per_agent,
     }

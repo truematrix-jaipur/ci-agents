@@ -14,28 +14,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.db_connectors.db_manager import db_manager
+from core.agent_catalog import get_agent_specs
 
 
+INCLUDE_DEPRECATED = os.getenv("HEALTHCHECK_INCLUDE_DEPRECATED_AGENTS", "false").lower() in ("1", "true", "yes")
 AGENT_SPECS = [
-    ("agents.agent_builder.agent", "AgentBuilder", None),
-    ("agents.campaign_planner_agent.agent", "CampaignPlannerAgent", {"task": {"type": "plan_campaign"}}),
-    ("agents.data_analyser.agent", "DataAnalyserAgent", {"task": {"type": "query_db", "query": "SELECT 1"}}),
-    ("agents.design_agent.agent", "DesignAgent", None),
-    ("agents.devops_agent.agent", "DevOpsAgent", {"task": {"type": "get_system_metrics"}}),
-    ("agents.email_marketing_agent.agent", "EmailMarketingAgent", None),
-    ("agents.erpnext_agent.agent", "ERPNextAgent", {"task": {"type": "get_customer_id", "email": "healthcheck@localhost"}}),
-    ("agents.erpnext_dev_agent.agent", "ERPNextDevAgent", None),
-    ("agents.fb_campaign_manager.agent", "FBCampaignManagerAgent", {"task": {"type": "optimize_bidding", "campaign_id": "health"}}),
-    ("agents.google_agent.agent", "GoogleAgent", {"task": {"type": "get_ga4_conversions"}}),
-    ("agents.growth_agent.agent", "GrowthAgent", None),
-    ("agents.integration_agent.agent", "IntegrationAgent", {"task": {"type": "check_stock_levels", "sku": "health-sku"}}),
-    ("agents.seo_agent.agent", "SEOAgent", {"task": {"type": "status"}}),
-    ("agents.server_agent.agent", "ServerAgent", {"task": {"type": "get_system_metrics"}}),
-    # Requires live LLM credentials; keep import/init check only.
-    ("agents.skill_agent.agent", "SkillAgent", None),
-    ("agents.smo_agent.agent", "SMOResponsiveAgent", {"task": {"type": "post_update", "platform": "x", "content": "health check"}}),
-    ("agents.training_agent.agent", "TrainingAgent", None),
-    ("agents.wordpress_tech.agent", "WordPressTechAgent", {"task": {"type": "health_check", "site_path": "/var/www/html/indogenmed.org/html"}}),
+    (spec.module_path, spec.class_name, spec.smoke_task)
+    for spec in get_agent_specs(include_deprecated=INCLUDE_DEPRECATED)
 ]
 
 
@@ -80,6 +65,20 @@ def _check_env_capabilities():
     def _present(name: str) -> bool:
         return bool((os.getenv(name) or "").strip())
 
+    per_agent_requirements = []
+    specs = get_agent_specs(include_deprecated=INCLUDE_DEPRECATED)
+    for spec in specs:
+        missing_env = [name for name in spec.required_env if not _present(name)]
+        missing_bins = [name for name in spec.required_binaries if not shutil.which(name)]
+        per_agent_requirements.append(
+            {
+                "role": spec.role,
+                "ok": not (missing_env or missing_bins),
+                "missing_env": missing_env,
+                "missing_binaries": missing_bins,
+            }
+        )
+
     return {
         "llm": {
             "openai_key_present": _present("OPENAI_API_KEY"),
@@ -92,6 +91,7 @@ def _check_env_capabilities():
                 os.getenv("GSC_SERVICE_ACCOUNT_FILE", "/home/agents/agents/seo_agent/credentials/gsc_service_account.json")
             ).exists(),
         },
+        "agent_requirements": per_agent_requirements,
     }
 
 

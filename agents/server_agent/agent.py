@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.base_agent import BaseAgent
 
 from config.settings import config
-from agents.server_agent.ops_checks import check_container_status, get_system_metrics
+from agents.server_agent.subagents.runtime_ops import RuntimeOpsSubagent
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,8 @@ class ServerAgent(BaseAgent):
         super().__init__(agent_id)
         self.retention_days = 7 # Default retention for logs/backups
         self.mcp_path = config.MCP_CONFIG_PATH
+        # Backward compatibility for legacy devops queue publishers.
+        self.pubsub.subscribe("task_queue_devops_agent")
 
     def handle_task(self, task_data):
         logger.info(f"Server Agent {self.agent_id} handling task: {task_data}")
@@ -169,7 +171,7 @@ class ServerAgent(BaseAgent):
         return {"status": "success", "message": "Log and backup cleanup completed."}
 
     def _check_container_status(self, task_data):
-        result = check_container_status()
+        result = self.spawn_subagent(RuntimeOpsSubagent, {"type": "check_container_status"})
         self.log_execution(
             task=task_data,
             thought_process="Running shared ops check for Docker container health.",
@@ -179,7 +181,7 @@ class ServerAgent(BaseAgent):
         return result
 
     def _get_system_metrics(self, task_data):
-        result = get_system_metrics()
+        result = self.spawn_subagent(RuntimeOpsSubagent, {"type": "get_system_metrics"})
         self.log_execution(
             task=task_data,
             thought_process="Running shared ops check for host load and memory.",

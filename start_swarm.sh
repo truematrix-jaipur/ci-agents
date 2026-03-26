@@ -22,7 +22,7 @@ nohup python3 agents/data_analyser/agent.py > logs/data_analyser.log 2>&1 &
 nohup python3 agents/integration_agent/agent.py > logs/integration_agent.log 2>&1 &
 nohup python3 agents/erpnext_agent/agent.py > logs/erpnext_agent.log 2>&1 &
 nohup python3 agents/erpnext_dev_agent/agent.py > logs/erpnext_dev_agent.log 2>&1 &
-nohup python3 agents/devops_agent/agent.py > logs/devops_agent.log 2>&1 &
+# devops_agent is a compatibility alias routed to server_agent; keep a single runtime owner.
 nohup python3 agents/growth_agent/agent.py > logs/growth_agent.log 2>&1 &
 nohup python3 agents/campaign_planner_agent/agent.py > logs/campaign_planner_agent.log 2>&1 &
 nohup python3 agents/email_marketing_agent/agent.py > logs/email_marketing_agent.log 2>&1 &

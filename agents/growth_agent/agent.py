@@ -34,8 +34,8 @@ class GrowthAgent(BaseAgent):
         # 1. Ask Data Analyser for sales data
         self.publish_task_to_agent("data_analyser", {"type": "query_db", "database": "erpnext", "query": "SELECT SUM(grand_total) FROM `tabSales Order` WHERE creation > DATE_SUB(NOW(), INTERVAL 3 MONTH)"})
         
-        # 2. Ask Google Agent for traffic data
-        self.publish_task_to_agent("google_agent", {"type": "get_ga4_conversions"})
+        # 2. Ask SEO Agent for canonical GA4 summary (google_agent remains focused on GCP operations).
+        self.publish_task_to_agent("seo_agent", {"type": "get_ga4_summary"})
         
         self.log_execution(
             task=task_data,

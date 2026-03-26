@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from core.db_connectors.db_manager import db_manager
 from core.analytics.efficiency_matrix import build_agent_efficiency_matrix
 from core.diagnostics.preflight import run_preflight_diagnostics
+from core.agent_catalog import get_api_catalog, get_agent_spec, resolve_agent_role
 from config.settings import config
 from tracker.tracker_core import swarm_tracker, EntryType, Status
 
@@ -153,27 +154,9 @@ async def health_check():
 
 @app.get("/agents")
 async def list_agents(user=Depends(get_current_user)):
-    agent_roles = [
-        "wordpress_tech",
-        "seo_agent",
-        "data_analyser",
-        "integration_agent",
-        "erpnext_agent",
-        "erpnext_dev_agent",
-        "devops_agent",
-        "design_agent",
-        "growth_agent",
-        "campaign_planner_agent",
-        "email_marketing_agent",
-        "google_agent",
-        "fb_campaign_manager",
-        "smo_agent",
-        "skill_agent",
-        "training_agent",
-        "agent_builder",
-        "server_agent",
-    ]
-    return [{"role": role, "status": "online", "capabilities": ["autonomous", "subagent_spawn"]} for role in agent_roles]
+    include_deprecated = os.getenv("API_INCLUDE_DEPRECATED_AGENTS", "false").lower() in ("1", "true", "yes")
+    catalog = get_api_catalog(include_deprecated=include_deprecated)
+    return [{**entry, "status": "online"} for entry in catalog]
 
 
 @app.post("/task")
@@ -188,6 +171,11 @@ async def assign_task(request: TaskRequest, user=Depends(get_current_user)):
 
 
 def _publish_task(agent_role: str, task_type: str, payload: dict, source_agent: str, username: str = "system"):
+    spec = get_agent_spec(agent_role)
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"Unknown agent_role: {agent_role}")
+    routed_role = resolve_agent_role(agent_role)
+
     redis_client = db_manager.get_redis_client()
     task_id = str(uuid.uuid4())
 
@@ -198,9 +186,15 @@ def _publish_task(agent_role: str, task_type: str, payload: dict, source_agent: 
         "user": username,
     }
 
-    target_channel = f"task_queue_{agent_role}"
+    target_channel = f"task_queue_{routed_role}"
     redis_client.publish(target_channel, json.dumps(message))
-    return {"status": "success", "task_id": task_id, "agent": agent_role, "task_type": task_type}
+    return {
+        "status": "success",
+        "task_id": task_id,
+        "agent": agent_role,
+        "routed_to": routed_role,
+        "task_type": task_type,
+    }
 
 
 @app.post("/webhook/{agent_role}/{task_type}")

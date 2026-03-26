@@ -28,11 +28,38 @@ class CampaignPlannerAgent(BaseAgent):
             return super().handle_task(task_data)
 
     def _plan_campaign(self, task_data):
-        # Notify sub-agents of the new plan
-        self.publish_task_to_agent("google_agent", {"type": "set_new_budget", "budget": 5000})
-        self.publish_task_to_agent("fb_campaign_manager", {"type": "set_new_budget", "budget": 3000})
-        
-        return {"status": "success", "message": "Campaign plan dispatched."}
+        plan = task_data.get("task", {})
+        google_budget = float(plan.get("google_budget", 5000))
+        fb_budget = float(plan.get("fb_budget", 3000))
+        campaign_name = plan.get("campaign_name", "default_campaign")
+
+        # Notify sub-agents of the new plan with traceable task IDs.
+        google_task_id = self.publish_task_to_agent(
+            "google_agent",
+            {
+                "type": "set_new_budget",
+                "budget": google_budget,
+                "channel": "google_ads",
+                "campaign_name": campaign_name,
+            },
+        )
+        fb_task_id = self.publish_task_to_agent(
+            "fb_campaign_manager",
+            {
+                "type": "set_new_budget",
+                "budget": fb_budget,
+                "campaign_id": campaign_name,
+            },
+        )
+
+        return {
+            "status": "success",
+            "message": "Campaign plan dispatched.",
+            "dispatched": {
+                "google_task_id": google_task_id,
+                "fb_task_id": fb_task_id,
+            },
+        }
 
 if __name__ == "__main__":
     agent = CampaignPlannerAgent()

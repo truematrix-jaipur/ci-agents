@@ -41,11 +41,17 @@ class DataAnalyserAgent(BaseAgent):
             return {"status": "error", "message": "No query provided"}
 
         # Fetch a fresh connection per query to avoid using stale pool connections
-        conn = (
-            db_manager.get_erpnext_mysql_connection()
-            if db_target == "erpnext"
-            else db_manager.get_mysql_connection()
-        )
+        # Allow injected connections for tests or controlled one-off execution.
+        if db_target == "erpnext" and getattr(self, "erpnext_conn", None):
+            conn = self.erpnext_conn
+        elif db_target != "erpnext" and getattr(self, "mysql_conn", None):
+            conn = self.mysql_conn
+        else:
+            conn = (
+                db_manager.get_erpnext_mysql_connection()
+                if db_target == "erpnext"
+                else db_manager.get_mysql_connection()
+            )
         if not conn:
             return {"status": "error", "message": "Database connection failed"}
 
@@ -75,7 +81,11 @@ class DataAnalyserAgent(BaseAgent):
         finally:
             if 'cursor' in locals() and cursor:
                 cursor.close()
-            if conn:
+            # Do not close injected test connections.
+            if conn and not (
+                (db_target == "erpnext" and getattr(self, "erpnext_conn", None) is conn)
+                or (db_target != "erpnext" and getattr(self, "mysql_conn", None) is conn)
+            ):
                 conn.close()
 
     def _analyze_metrics(self, task_data):

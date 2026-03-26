@@ -106,6 +106,13 @@ class BaseAgent:
 
     def publish_task_to_agent(self, target_agent_role, task_payload):
         """Sends a task to another class of agent"""
+        if not isinstance(task_payload, dict):
+            raise ValueError("task_payload must be a dictionary")
+
+        # Ensure every delegated task has a stable task id for traceability/correlation.
+        task_payload = dict(task_payload)
+        task_payload.setdefault("task_id", str(uuid.uuid4()))
+
         message = {
             "source_agent": self.AGENT_ROLE,
             "source_id": self.agent_id,
@@ -114,6 +121,7 @@ class BaseAgent:
         target_channel = f"task_queue_{target_agent_role}"
         self.redis_client.publish(target_channel, json.dumps(message))
         logger.info(f"Published task to {target_agent_role}: {task_payload}")
+        return task_payload["task_id"]
 
     def run(self):
         """Main loop: Listen for tasks and ensure we ALWAYS reply."""

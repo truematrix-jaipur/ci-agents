@@ -2,24 +2,19 @@ import sys
 import os
 import logging
 import json
-import subprocess
 
 # Append project root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.base_agent import BaseAgent
+from agents.server_agent.ops_checks import check_container_status, get_system_metrics
 
 logger = logging.getLogger(__name__)
 
 class DevOpsAgent(BaseAgent):
     AGENT_ROLE = "devops_agent"
-    SYSTEM_PROMPT = """You are an expert DevOps and Site Reliability Engineer Agent.
-    You manage Docker environments, CI/CD pipelines, and server health.
-    
-    You have the capability to execute shell commands, check container logs, 
-    and verify system resource usage.
-    
-    CRITICAL: Never execute destructive commands (like rm -rf /) unless explicitly 
-    confirmed via a two-step validation. Always dry-run when possible."""
+    SYSTEM_PROMPT = """You are a compatibility DevOps agent.
+    Runtime operations are consolidated with server_agent via shared ops checks.
+    Maintain backward compatibility for existing devops task types while avoiding duplicated logic."""
 
     def handle_task(self, task_data):
         logger.info(f"DevOps Agent {self.agent_id} handling task: {task_data}")
@@ -33,25 +28,24 @@ class DevOpsAgent(BaseAgent):
             return super().handle_task(task_data)
 
     def _check_containers(self, task_data):
-        try:
-            result = subprocess.run(["docker", "ps", "--format", "{{.Names}}: {{.Status}}"], capture_output=True, text=True)
-            self.log_execution(
-                task=task_data,
-                thought_process="Checked Docker container statuses using subprocess.",
-                action_taken="Executed docker ps command."
-            )
-            return {"status": "success", "containers": result.stdout.strip().split("\n")}
-        except Exception as e:
-            logger.error(f"Docker check failed: {e}")
-            return {"status": "error", "message": str(e)}
+        result = check_container_status()
+        self.log_execution(
+            task=task_data,
+            thought_process="Delegated to shared server ops check for container status.",
+            action_taken=f"Container status result: {result.get('status')}",
+            status="success" if result.get("status") == "success" else "warning",
+        )
+        return result
 
     def _get_metrics(self, task_data):
-        try:
-            load = subprocess.run(["uptime"], capture_output=True, text=True).stdout.strip()
-            mem = subprocess.run(["free", "-m"], capture_output=True, text=True).stdout.strip()
-            return {"status": "success", "load": load, "memory": mem}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+        result = get_system_metrics()
+        self.log_execution(
+            task=task_data,
+            thought_process="Delegated to shared server ops check for system metrics.",
+            action_taken=f"System metrics result: {result.get('status')}",
+            status="success" if result.get("status") == "success" else "warning",
+        )
+        return result
 
 if __name__ == "__main__":
     agent = DevOpsAgent()

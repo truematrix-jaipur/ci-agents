@@ -58,6 +58,9 @@ class DBManager:
 
     def get_mysql_connection(self):
         self._init_mysql_pool()
+        if self._mysql_pool is None:
+            logger.error("MySQL pool is not initialized")
+            return None
         try:
             return self._mysql_pool.get_connection()
         except Error as e:
@@ -66,6 +69,9 @@ class DBManager:
 
     def get_erpnext_mysql_connection(self):
         self._init_erpnext_pool()
+        if self._erpnext_mysql_pool is None:
+            logger.error("ERPNext MySQL pool is not initialized")
+            return None
         try:
             return self._erpnext_mysql_pool.get_connection()
         except Error as e:

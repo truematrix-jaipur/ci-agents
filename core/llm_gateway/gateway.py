@@ -25,6 +25,21 @@ class LLMGateway:
             self.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
         else:
             self.gemini_client = None
+        self._provider_disabled_until = {}
+
+    def _provider_temporarily_disabled(self, provider: str) -> bool:
+        until = self._provider_disabled_until.get(provider)
+        if not until:
+            return False
+        if time.time() >= until:
+            self._provider_disabled_until.pop(provider, None)
+            return False
+        return True
+
+    def _mark_provider_temporarily_disabled(self, provider: str):
+        ttl = max(60, int(getattr(config, "PROVIDER_DISABLE_TTL_SECONDS", 21600)))
+        self._provider_disabled_until[provider] = time.time() + ttl
+        logger.warning(f"Temporarily disabling provider {provider} for {ttl}s due to fatal auth/quota error")
 
     def call_openai(self, messages, model="gpt-4o", temperature=0.2):
         if not self.openai_client:
@@ -132,17 +147,24 @@ class LLMGateway:
 
     def execute(self, prompt, provider="anthropic", system_prompt="", retries=2, **kwargs):
         """Unified entry point with Retry AND Multi-Provider Fallback logic"""
-        
-        # Priority order for fallback if the primary fails
-        all_providers = ["anthropic", "openai", "gemini"]
-        # Move primary to front
+        configured_disabled = set(getattr(config, "LLM_DISABLED_PROVIDERS", []) or [])
+
+        # Priority order for fallback if the primary fails.
+        all_providers = [p for p in ["anthropic", "openai", "gemini"] if p not in configured_disabled]
+        if provider in configured_disabled:
+            provider = None
         if provider in all_providers:
             all_providers.remove(provider)
-        providers_to_try = [provider] + all_providers
+            providers_to_try = [provider] + all_providers
+        else:
+            providers_to_try = all_providers
 
         last_exception = None
 
         for current_provider in providers_to_try:
+            if self._provider_temporarily_disabled(current_provider):
+                logger.info(f"Provider {current_provider} is temporarily disabled, skipping")
+                continue
             logger.info(f"Attempting execution with provider: {current_provider}")
             
             for attempt in range(retries):
@@ -152,7 +174,16 @@ class LLMGateway:
                     last_exception = e
                     # Specific "Out of Credits" or "Quota" error: skip retries and jump to fallback
                     error_str = str(e).lower()
-                    if "credit balance" in error_str or "insufficient_quota" in error_str or "rate limit" in error_str:
+                    if (
+                        "invalid x-api-key" in error_str
+                        or "authentication_error" in error_str
+                        or "permission_denied" in error_str
+                        or "resource_exhausted" in error_str
+                        or "credit balance" in error_str
+                        or "insufficient_quota" in error_str
+                        or "rate limit" in error_str
+                    ):
+                        self._mark_provider_temporarily_disabled(current_provider)
                         logger.warning(f"Quota/Balance error for {current_provider}, skipping to next provider: {e}")
                         break
                     

@@ -43,7 +43,17 @@ class VectorStore:
             )
 
         self._ef = embedding_functions.DefaultEmbeddingFunction()
+        try:
+            self._ensure_collections()
+        except Exception as e:
+            logger.warning(f"Primary Chroma backend failed, falling back to local persistent client: {e}")
+            self._client = chromadb.PersistentClient(path=cfg.CHROMA_DB_PATH)
+            self._ensure_collections()
 
+        logger.info("ChromaDB initialized — collections ready")
+        return self
+
+    def _ensure_collections(self):
         # Ensure all collections exist
         self._get_or_create(cfg.CHROMA_COLLECTION_GSC)
         self._get_or_create(cfg.CHROMA_COLLECTION_GA)
@@ -57,22 +67,30 @@ class VectorStore:
             # Older deployments may not have this config — ignore if missing
             pass
 
-        logger.info("ChromaDB initialized — collections ready")
-        return self
-
     def _get_or_create(self, name: str):
-        if self._client is None or self._ef is None:
-            self.init()
-        return self._client.get_or_create_collection(
-            name=name, embedding_function=self._ef
-        )
+        return self._resolve_collection(name)
 
     def _col(self, name: str):
+        return self._resolve_collection(name)
+
+    def _resolve_collection(self, name: str):
         if self._client is None or self._ef is None:
             self.init()
-        return self._client.get_or_create_collection(
-            name=name, embedding_function=self._ef
-        )
+        last_exc = None
+        attempts = [
+            ("get_collection+ef", lambda: self._client.get_collection(name=name, embedding_function=self._ef)),
+            ("get_collection", lambda: self._client.get_collection(name=name)),
+            ("get_or_create+ef", lambda: self._client.get_or_create_collection(name=name, embedding_function=self._ef)),
+            ("get_or_create", lambda: self._client.get_or_create_collection(name=name)),
+        ]
+        for label, fn in attempts:
+            try:
+                return fn()
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"Collection resolve attempt failed ({label}) for '{name}': {e}")
+                continue
+        raise RuntimeError(f"Unable to resolve Chroma collection '{name}': {last_exc}")
 
     # ── GSC Snapshots ──────────────────────────────────────────────────────
 

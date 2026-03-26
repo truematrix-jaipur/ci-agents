@@ -12,7 +12,15 @@ unset GOOGLE_SERVICE_ACCOUNT_PATH
 unset GOOGLE_API_KEY
 unset GOOGLE_APPLICATION_CREDENTIALS
 
+api_running=0
 if pgrep -f "/home/agents/core/api_server.py" >/dev/null 2>&1; then
+  api_running=1
+fi
+if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':8020$'; then
+  api_running=1
+fi
+
+if [ "$api_running" -eq 1 ]; then
   echo "API server already running; skipping launch."
 else
   nohup python3 core/api_server.py > logs/api_server.log 2>&1 &

@@ -190,3 +190,88 @@ def test_agent_handle_task_smoke(base_stubs, patch_subprocess, monkeypatch, modu
     result = agent.handle_task(task)
     assert isinstance(result, dict)
     assert result.get("status") in {"success", "error"}
+
+
+def test_wordpress_implement_fix_dry_run_and_apply(base_stubs, tmp_path):
+    from agents.wordpress_tech.agent import WordPressTechAgent
+
+    wp_root = tmp_path / "wp"
+    target = wp_root / "wp-content" / "themes" / "mytheme" / "functions.php"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("<?php\n// old_value\n", encoding="utf-8")
+
+    agent = _mk_agent(WordPressTechAgent)
+
+    dry_run_task = {
+        "task": {
+            "type": "implement_fix",
+            "site_path": str(wp_root),
+            "target_path": "wp-content/themes/mytheme/functions.php",
+            "replacements": [{"find_text": "old_value", "replace_text": "new_value"}],
+            "dry_run": True,
+        }
+    }
+    dry = agent.handle_task(dry_run_task)
+    assert dry["status"] == "success"
+    assert dry["dry_run"] is True
+    assert "old_value" in target.read_text(encoding="utf-8")
+
+    apply_task = {
+        "task": {
+            "type": "implement_fix",
+            "site_path": str(wp_root),
+            "target_path": "wp-content/themes/mytheme/functions.php",
+            "replacements": [{"find_text": "old_value", "replace_text": "new_value"}],
+            "dry_run": False,
+        }
+    }
+    applied = agent.handle_task(apply_task)
+    assert applied["status"] == "success"
+    assert applied["backup_file"]
+    assert "new_value" in target.read_text(encoding="utf-8")
+
+
+def test_wordpress_implement_fix_blocks_path_traversal(base_stubs, tmp_path):
+    from agents.wordpress_tech.agent import WordPressTechAgent
+
+    wp_root = tmp_path / "wp"
+    wp_root.mkdir(parents=True, exist_ok=True)
+    agent = _mk_agent(WordPressTechAgent)
+
+    task = {
+        "task": {
+            "type": "implement_fix",
+            "site_path": str(wp_root),
+            "target_path": "../etc/passwd",
+            "replacements": [{"find_text": "x", "replace_text": "y"}],
+        }
+    }
+    result = agent.handle_task(task)
+    assert result["status"] == "error"
+    assert "Path traversal" in result["message"]
+
+
+def test_wordpress_woocommerce_rule_change_set_option(base_stubs, monkeypatch):
+    from agents.wordpress_tech.agent import WordPressTechAgent
+
+    agent = _mk_agent(WordPressTechAgent)
+
+    monkeypatch.setattr(
+        agent,
+        "_run_wp_cli",
+        lambda *a, **k: {"ok": True, "output": "updated", "command": "wp option update", "returncode": 0},
+        raising=True,
+    )
+
+    task = {
+        "task": {
+            "type": "woocommerce_rule_change",
+            "site_path": "/tmp",
+            "action": "set_option",
+            "option_name": "woocommerce_currency",
+            "option_value": "USD",
+        }
+    }
+    result = agent.handle_task(task)
+    assert result["status"] == "success"
+    assert result["action"] == "set_option"

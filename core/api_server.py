@@ -7,7 +7,8 @@ import os
 import sys
 import uuid
 import datetime
-from jose import jwt, JWTError
+import threading
+from jose import jwt, JWTError, ExpiredSignatureError
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -17,6 +18,7 @@ from core.db_connectors.db_manager import db_manager
 from core.analytics.efficiency_matrix import build_agent_efficiency_matrix
 from core.diagnostics.preflight import run_preflight_diagnostics
 from core.agent_catalog import get_api_catalog, get_agent_spec, resolve_agent_role
+from core.agent_runtime import ensure_agents_running
 from config.settings import config
 from tracker.tracker_core import swarm_tracker, EntryType, Status
 
@@ -55,6 +57,35 @@ def _load_valid_users() -> dict[str, str]:
 VALID_USERS = _load_valid_users()
 
 
+def _autostart_loop(stop_event: threading.Event):
+    while not stop_event.is_set():
+        try:
+            started = ensure_agents_running()
+            if started:
+                logging.getLogger(__name__).info(f"Auto-started missing agents: {', '.join(started)}")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Agent autostart loop failed: {e}")
+        stop_event.wait(max(5, config.AGENT_AUTOSTART_INTERVAL_SECONDS))
+
+
+@app.on_event("startup")
+async def startup_event():
+    if not config.AGENT_AUTOSTART_ENABLED:
+        return
+    stop_event = threading.Event()
+    app.state.autostart_stop_event = stop_event
+    thread = threading.Thread(target=_autostart_loop, args=(stop_event,), daemon=True)
+    app.state.autostart_thread = thread
+    thread.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    stop_event = getattr(app.state, "autostart_stop_event", None)
+    if stop_event:
+        stop_event.set()
+
+
 async def get_current_user(request: Request):
     auth_header = request.headers.get("Authorization")
     if not auth_header:
@@ -64,6 +95,8 @@ async def get_current_user(request: Request):
     try:
         payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
         return payload
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -86,6 +119,16 @@ class GoogleLoginRequest(BaseModel):
 class WebhookTaskRequest(BaseModel):
     payload: dict = {}
     source: str = "webhook"
+
+
+def _is_allowed_google_user(email: str) -> bool:
+    normalized = (email or "").strip().lower()
+    if not normalized or "@" not in normalized:
+        return False
+    if normalized in set(config.GOOGLE_ALLOWED_EMAILS):
+        return True
+    domain = normalized.split("@", 1)[1]
+    return domain in set(config.GOOGLE_ALLOWED_DOMAINS)
 
 
 @app.post("/login")
@@ -120,6 +163,8 @@ async def login(request: LoginRequest):
 @app.post("/google-login")
 async def google_login(request: GoogleLoginRequest):
     try:
+        if not config.GOOGLE_CLIENT_ID:
+            raise HTTPException(status_code=503, detail="Google login is not configured")
         idinfo = id_token.verify_oauth2_token(
             request.token,
             google_requests.Request(),
@@ -129,8 +174,9 @@ async def google_login(request: GoogleLoginRequest):
         email = idinfo.get("email")
         name = idinfo.get("name", email.split("@")[0])
 
-        if not email or not email.endswith("@truematrix.io"):
-            raise HTTPException(status_code=403, detail="Only @truematrix.io emails are authorized")
+        if not _is_allowed_google_user(email):
+            allowed = ", ".join(config.GOOGLE_ALLOWED_DOMAINS) or "configured domains"
+            raise HTTPException(status_code=403, detail=f"Google account is not authorized. Allowed domains: {allowed}")
 
         token = jwt.encode(
             {
@@ -143,8 +189,19 @@ async def google_login(request: GoogleLoginRequest):
         )
 
         return {"status": "success", "token": token, "user": {"email": email, "name": name}}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Google auth failed: {str(e)}")
+
+
+@app.get("/auth/google-config")
+async def get_google_auth_config():
+    return {
+        "enabled": bool(config.GOOGLE_CLIENT_ID),
+        "client_id": config.GOOGLE_CLIENT_ID or "",
+        "allowed_domains": config.GOOGLE_ALLOWED_DOMAINS,
+    }
 
 
 @app.get("/health")
@@ -170,6 +227,29 @@ async def assign_task(request: TaskRequest, user=Depends(get_current_user)):
     )
 
 
+def _get_task_events(task_id: str, limit: int = 200) -> list[dict]:
+    redis_client = db_manager.get_redis_client()
+    key = f"task_events:{task_id}"
+    raw = redis_client.lrange(key, 0, max(0, limit - 1))
+    events = []
+    for item in raw:
+        try:
+            events.append(json.loads(item))
+        except Exception:
+            continue
+    return events
+
+
+def _get_recent_chat_events(limit: int = 300) -> list[dict]:
+    redis_client = db_manager.get_redis_client()
+    task_ids = redis_client.lrange("dashboard_recent_tasks", 0, 99)
+    all_events: list[dict] = []
+    for task_id in task_ids:
+        all_events.extend(_get_task_events(task_id, limit=20))
+    all_events.sort(key=lambda item: item.get("timestamp", ""))
+    return all_events[-max(1, limit) :]
+
+
 def _publish_task(agent_role: str, task_type: str, payload: dict, source_agent: str, username: str = "system"):
     spec = get_agent_spec(agent_role)
     if spec is None:
@@ -188,6 +268,26 @@ def _publish_task(agent_role: str, task_type: str, payload: dict, source_agent: 
 
     target_channel = f"task_queue_{routed_role}"
     redis_client.publish(target_channel, json.dumps(message))
+    # Seed task event stream so UI can immediately render dispatch acknowledgment.
+    try:
+        seeded_event = {
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "task_id": task_id,
+            "agent_role": "api_gateway",
+            "event_type": "dispatched",
+            "status": "info",
+            "message": f"Task dispatched to {routed_role}",
+            "payload": {"task_type": task_type, "requested_agent": agent_role, "routed_to": routed_role},
+        }
+        key = f"task_events:{task_id}"
+        redis_client.rpush(key, json.dumps(seeded_event))
+        redis_client.expire(key, 3600)
+        redis_client.publish(f"task_response_{task_id}", json.dumps(seeded_event))
+        redis_client.lpush("dashboard_recent_tasks", task_id)
+        redis_client.ltrim("dashboard_recent_tasks", 0, 199)
+        redis_client.expire("dashboard_recent_tasks", 3600 * 24)
+    except Exception:
+        pass
     return {
         "status": "success",
         "task_id": task_id,
@@ -215,6 +315,16 @@ async def webhook_task(
         source_agent=request.source or "webhook",
         username="webhook",
     )
+
+
+@app.get("/task/{task_id}/events")
+async def get_task_events(task_id: str, limit: int = 200, user=Depends(get_current_user)):
+    return {"task_id": task_id, "events": _get_task_events(task_id, limit=limit)}
+
+
+@app.get("/chat/events")
+async def get_chat_events(limit: int = 300, user=Depends(get_current_user)):
+    return {"events": _get_recent_chat_events(limit=limit)}
 
 
 @app.get("/logs")

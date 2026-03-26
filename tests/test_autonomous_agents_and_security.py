@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import builtins
+import json
 
 import pytest
 
@@ -101,6 +102,158 @@ def test_data_analyser_parameterized_query(base_stubs):
     assert conn.cursor_obj.executed[0][1] == ("https://x",)
 
 
+def test_data_analyser_manual_sales_trend_command(base_stubs):
+    from agents.data_analyser.agent import DataAnalyserAgent
+
+    rows = [
+        {"day": "2026-03-20", "orders": 3, "revenue": 100.0},
+        {"day": "2026-03-21", "orders": 2, "revenue": 80.0},
+    ]
+    conn = FakeConn(rows=rows)
+    agent = _mk_agent(DataAnalyserAgent, mysql_conn=FakeConn(), erpnext_conn=conn)
+
+    res = agent.handle_task({"task": {"type": "manual_command", "command": "summarize last 7 days sales trend"}})
+    assert res["status"] == "success"
+    assert res["window_days"] == 7
+    assert "timeline" in res
+    assert "Sales trend (7d)" in res["summary"]
+
+
+def test_data_analyser_autonomous_sales_monitor_delegates_on_drop(base_stubs, monkeypatch):
+    from agents.data_analyser.agent import DataAnalyserAgent
+
+    # First half stronger than second half -> negative trend.
+    rows = [
+        {"day": "2026-03-20", "orders": 3, "revenue": 120.0},
+        {"day": "2026-03-21", "orders": 3, "revenue": 100.0},
+        {"day": "2026-03-22", "orders": 2, "revenue": 80.0},
+        {"day": "2026-03-23", "orders": 1, "revenue": 20.0},
+    ]
+    agent = _mk_agent(DataAnalyserAgent, mysql_conn=FakeConn(), erpnext_conn=FakeConn(rows=rows))
+    delegated = {}
+
+    def _capture(self, role, payload):
+        delegated["role"] = role
+        delegated["payload"] = payload
+        return "task-123"
+
+    monkeypatch.setattr(DataAnalyserAgent, "publish_task_to_agent", _capture, raising=False)
+    res = agent.handle_task(
+        {
+            "task": {
+                "type": "autonomous_sales_monitor",
+                "days": 4,
+                "drop_alert_pct": -5.0,
+                "auto_delegate": True,
+            }
+        }
+    )
+    assert res["status"] == "success"
+    assert res["alert_triggered"] is True
+    assert res["delegated_task_id"] == "task-123"
+    assert delegated["role"] == "growth_agent"
+
+
+def test_growth_agent_closed_loop_sync(base_stubs, monkeypatch):
+    from agents.growth_agent.agent import GrowthAgent
+
+    agent = _mk_agent(GrowthAgent)
+
+    def _spawn(self, cls, payload):
+        role = getattr(cls, "AGENT_ROLE", "")
+        if role == "data_analyser":
+            return {
+                "status": "success",
+                "trend": {"percent_change": -12.0, "direction": "down"},
+                "totals": {"revenue": 1000, "orders": 20},
+            }
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "get_ga4_summary":
+            return {"status": "success", "ga4": {"sessions": 2000, "conversions": 20}}
+        if role == "google_agent":
+            return {"status": "success", "clicks": 1200, "impressions": 25000, "top_keywords": [{"query": "vitamin c"}]}
+        if role == "campaign_planner_agent":
+            return {"status": "success", "message": "Campaign plan dispatched."}
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "run_autonomous_pipeline":
+            return {"status": "success", "message": "Autonomous SEO pipeline triggered."}
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "run_extended":
+            return {"status": "success", "details": "extended"}
+        if role == "fb_campaign_manager":
+            return {"status": "success", "action": "Increased bid for performance."}
+        if role == "skill_agent":
+            return {"status": "success", "message": "knowledge dispatched"}
+        return {"status": "error", "message": "unexpected"}
+
+    monkeypatch.setattr(GrowthAgent, "spawn_subagent", _spawn, raising=False)
+    res = agent.handle_task(
+        {"task": {"type": "plan_quarterly_growth", "execution_mode": "sync", "window_days": 30, "total_budget": 9000}}
+    )
+    assert res["status"] in {"success", "warning"}
+    assert res["mode"] == "sync"
+    assert "plan" in res
+    assert "execution" in res
+    assert res["plan"]["budget"]["total_budget"] == 9000.0
+
+
+def test_growth_agent_closed_loop_async_dispatch(base_stubs, monkeypatch):
+    from agents.growth_agent.agent import GrowthAgent
+
+    agent = _mk_agent(GrowthAgent)
+    dispatched = []
+
+    def _publish(self, role, payload):
+        dispatched.append((role, payload))
+        return f"tid-{len(dispatched)}"
+
+    monkeypatch.setattr(GrowthAgent, "publish_task_to_agent", _publish, raising=False)
+    res = agent.handle_task(
+        {"task": {"type": "plan_quarterly_growth", "execution_mode": "async", "window_days": 60, "total_budget": 12000}}
+    )
+    assert res["status"] == "success"
+    assert res["mode"] == "async"
+    assert len(dispatched) == 5
+    assert "campaign_plan_task_id" in res["dispatched"]
+
+
+def test_growth_agent_custom_csv_report_ingestion(base_stubs, tmp_path, monkeypatch):
+    from agents.growth_agent.agent import GrowthAgent
+
+    csv_file = tmp_path / "semrush_export.csv"
+    csv_file.write_text("keyword,traffic,position\nvitamin c,1200,4\nomega 3,800,7\n", encoding="utf-8")
+    agent = _mk_agent(GrowthAgent)
+
+    def _spawn(self, cls, payload):
+        role = getattr(cls, "AGENT_ROLE", "")
+        if role == "data_analyser":
+            return {"status": "success", "trend": {"percent_change": 3.5, "direction": "up"}, "totals": {"revenue": 2000}}
+        if role == "seo_agent" and payload.get("task", {}).get("type") == "get_ga4_summary":
+            return {"status": "success", "ga4": {"sessions": 1500, "conversions": 35}}
+        if role == "google_agent":
+            return {"status": "success", "clicks": 900, "impressions": 20000, "top_keywords": [{"query": "zinc"}]}
+        if role == "campaign_planner_agent":
+            return {"status": "success"}
+        if role == "seo_agent":
+            return {"status": "success"}
+        if role == "fb_campaign_manager":
+            return {"status": "success"}
+        if role == "skill_agent":
+            return {"status": "success"}
+        return {"status": "success"}
+
+    monkeypatch.setattr(GrowthAgent, "spawn_subagent", _spawn, raising=False)
+    res = agent.handle_task(
+        {
+            "task": {
+                "type": "plan_quarterly_growth",
+                "execution_mode": "sync",
+                "custom_reports": [str(csv_file)],
+            }
+        }
+    )
+    assert res["status"] in {"success", "warning"}
+    assert res["inputs"]["external"]["reports"]
+    assert res["diagnosis"]["keyword_signals"]["top_keywords_count"] >= 1
+
+
 def test_erpnext_customer_lookup_parameterized(base_stubs):
     from agents.erpnext_agent.agent import ERPNextAgent
 
@@ -112,6 +265,72 @@ def test_erpnext_customer_lookup_parameterized(base_stubs):
     q, params = conn.cursor_obj.executed[0]
     assert "%s" in q
     assert params == ("a@b.com",)
+
+
+def test_erpnext_dev_plan_release(base_stubs):
+    from agents.erpnext_dev_agent.agent import ERPNextDevAgent
+
+    agent = _mk_agent(ERPNextDevAgent)
+    agent.bench_path = "/home/erpnext/frappe_docker"
+    agent.logs_dir = Path("/tmp")
+    res = agent.handle_task(
+        {
+            "task": {
+                "type": "plan_release",
+                "sites": ["erp.igmhealth.com", "erp2.igmhealth.com"],
+                "apps": ["igm_custom"],
+                "patches": ["igm_custom.patches.execute_patch"],
+            }
+        }
+    )
+    assert res["status"] == "success"
+    plan = res["release_plan"]
+    assert "migrate_sites" in [s["name"] for s in plan["steps"]]
+    assert plan["sites"] == ["erp.igmhealth.com", "erp2.igmhealth.com"]
+
+
+def test_erpnext_dev_execute_release_dry_run(base_stubs):
+    from agents.erpnext_dev_agent.agent import ERPNextDevAgent
+
+    agent = _mk_agent(ERPNextDevAgent)
+    agent.bench_path = "/home/erpnext/frappe_docker"
+    agent.logs_dir = Path("/tmp")
+    res = agent.handle_task(
+        {"task": {"type": "execute_release", "sites": ["erp.igmhealth.com"], "apps": ["igm_custom"], "dry_run": True}}
+    )
+    assert res["status"] == "success"
+    assert res["dry_run"] is True
+    assert "run_log_path" in res
+
+
+def test_erpnext_dev_rollback_plan_and_execute(base_stubs, tmp_path, monkeypatch):
+    from agents.erpnext_dev_agent.agent import ERPNextDevAgent
+
+    run_id = "20260326_000001"
+    run_log = tmp_path / f"release_run_{run_id}.json"
+    run_log.write_text(
+        json.dumps({"plan": {"sites": ["erp.igmhealth.com"], "apps": ["igm_custom"]}}, indent=2),
+        encoding="utf-8",
+    )
+
+    agent = _mk_agent(ERPNextDevAgent)
+    agent.bench_path = "/home/erpnext/frappe_docker"
+    agent.logs_dir = tmp_path
+
+    # Dry-run rollback plan
+    plan_res = agent.handle_task({"task": {"type": "rollback_release", "run_id": run_id}})
+    assert plan_res["status"] == "success"
+    assert "rollback_plan" in plan_res
+
+    # Execute rollback
+    monkeypatch.setattr(
+        ERPNextDevAgent,
+        "_run_host_cmd",
+        lambda self, cmd, timeout=180: {"command": cmd, "returncode": 0, "stdout": "", "stderr": ""},
+        raising=False,
+    )
+    exec_res = agent.handle_task({"task": {"type": "rollback_release", "run_id": run_id, "execute": True}})
+    assert exec_res["status"] == "success"
 
 
 def test_notifier_uses_signed_token_links(monkeypatch):
@@ -189,7 +408,7 @@ def test_agent_handle_task_smoke(base_stubs, patch_subprocess, monkeypatch, modu
 
     result = agent.handle_task(task)
     assert isinstance(result, dict)
-    assert result.get("status") in {"success", "error"}
+    assert result.get("status") in {"success", "warning", "error"}
 
 
 def test_wordpress_implement_fix_dry_run_and_apply(base_stubs, tmp_path):

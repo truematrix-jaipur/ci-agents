@@ -17,17 +17,17 @@ from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 
-from config import cfg
-from gsc_client import GSCClient
-from ga_client import ga_client
-from vector_store import vector_store
-from analyzer import analyzer
-from implementer import implementer
-from validator import validator
-from notifier import notifier
-from mail_poller import mail_poller
-from gsc_extended import gsc_extended
-from extended_analyzer import extended_analyzer
+from agents.seo_agent.seo_config import cfg
+from agents.seo_agent.gsc_client import GSCClient
+from agents.seo_agent.ga_client import ga_client
+from agents.seo_agent.vector_store import vector_store
+from agents.seo_agent.analyzer import analyzer
+from agents.seo_agent.implementer import implementer
+from agents.seo_agent.validator import validator
+from agents.seo_agent.notifier import notifier
+from agents.seo_agent.mail_poller import mail_poller
+from agents.seo_agent.gsc_extended import gsc_extended
+from agents.seo_agent.extended_analyzer import extended_analyzer
 
 logger = logging.getLogger("ci.scheduler")
 
@@ -169,7 +169,7 @@ def step_fetch_and_analyze() -> Optional[str]:
         try:
             update_state(status="conversion_audit")
             logger.info("Running GA4 conversion audit...")
-            from ga4_conversion_auditor import GA4ConversionAuditor
+            from agents.seo_agent.ga4_conversion_auditor import GA4ConversionAuditor
             _auditor = GA4ConversionAuditor()
             # Pass top GSC keywords for cross-referencing — snapshot["data"]["query"]
             # rows have structure: {"keys": ["keyword"], "clicks": N, "impressions": N, ...}

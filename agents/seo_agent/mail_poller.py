@@ -41,7 +41,7 @@ class MailPoller:
     """
 
     def __init__(self):
-        from config import cfg
+        from agents.seo_agent.seo_config import cfg
         self.cfg = cfg
         self.gmail_service = None
         self.poll_email = os.getenv("GMAIL_POLL_EMAIL", "seo-agent@indogenmed.org")
@@ -277,7 +277,7 @@ class MailPoller:
     def process_piped_email(raw_email: str) -> Optional[dict]:
         """
         Parse a raw email piped from postfix.
-        Called as: /home/agents/ci-seo-agent/mail_pipe.py (reads stdin).
+        Called as: /home/agents/agents/seo_agent/mail_pipe.py (reads stdin).
         """
         try:
             msg = email.message_from_string(raw_email)
@@ -374,7 +374,7 @@ mail_poller = MailPoller()
 def main_pipe():
     """Entry point when called as postfix alias pipe: reads stdin."""
     import requests
-    from config import cfg
+    from agents.seo_agent.seo_config import cfg
 
     logging.basicConfig(level=logging.INFO)
     raw = sys.stdin.read()

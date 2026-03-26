@@ -11,8 +11,8 @@ from typing import Optional
 import anthropic
 from openai import OpenAI
 
-from config import cfg
-from vector_store import vector_store
+from agents.seo_agent.seo_config import cfg
+from agents.seo_agent.vector_store import vector_store
 
 logger = logging.getLogger("ci.analyzer")
 

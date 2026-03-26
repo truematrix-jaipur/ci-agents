@@ -28,10 +28,14 @@ GA4_SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"]
 class GA4Client:
     def __init__(self):
         self._client: Optional[BetaAnalyticsDataClient] = None
+        self._client_init_error: Optional[str] = None
+        self._failure_action_attempted: bool = False
 
     def _get_client(self) -> BetaAnalyticsDataClient:
         if self._client:
             return self._client
+        if self._client_init_error:
+            raise RuntimeError(self._client_init_error)
         try:
             creds = service_account.Credentials.from_service_account_file(
                 cfg.GSC_SERVICE_ACCOUNT_FILE,
@@ -41,24 +45,29 @@ class GA4Client:
             logger.info(f"GA4 client initialised — property {cfg.GA4_PROPERTY_ID}")
             return self._client
         except Exception as e:
-            logger.error(f"GA4 client init failed: {e}")
+            err_msg = f"GA4 client init failed: {e}"
+            self._client_init_error = err_msg
+            logger.error(err_msg)
             # Create a FLAG_FOR_REVIEW action so a human can add the service account to GA4 property
-            try:
-                from vector_store import vector_store
-                vector_store.create_action_item(
-                    action_type="FLAG_FOR_REVIEW",
-                    priority="critical",
-                    title="GA4 Data API access failure",
-                    description=(
-                        f"GA4 client failed to initialise: {str(e)[:300]}. "
-                        "Ensure the service account in config has Viewer access to the GA4 property."
-                    ),
-                    target_url="https://analytics.google.com/analytics/web/",
-                    data_signals={"error": str(e)[:500]},
-                )
-                logger.info("Created FLAG_FOR_REVIEW action for GA4 access failure")
-            except Exception as e2:
-                logger.warning(f"Could not create FLAG_FOR_REVIEW action for GA4 failure: {e2}")
+            if not self._failure_action_attempted:
+                self._failure_action_attempted = True
+                try:
+                    from agents.seo_agent.vector_store import vector_store
+                    action_id = vector_store.try_create_action_item(
+                        action_type="FLAG_FOR_REVIEW",
+                        priority="critical",
+                        title="GA4 Data API access failure",
+                        description=(
+                            f"GA4 client failed to initialise: {str(e)[:300]}. "
+                            "Ensure the service account in config has Viewer access to the GA4 property."
+                        ),
+                        target_url="https://analytics.google.com/analytics/web/",
+                        data_signals={"error": str(e)[:500]},
+                    )
+                    if action_id:
+                        logger.info(f"Created FLAG_FOR_REVIEW action for GA4 access failure: {action_id}")
+                except Exception as e2:
+                    logger.warning(f"Could not create FLAG_FOR_REVIEW action for GA4 failure: {e2}")
             raise
 
     # ── Core runner ────────────────────────────────────────────────────────

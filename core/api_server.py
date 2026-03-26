@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
@@ -14,6 +14,9 @@ from google.auth.transport import requests as google_requests
 # Append project root
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from core.db_connectors.db_manager import db_manager
+from core.analytics.efficiency_matrix import build_agent_efficiency_matrix
+from core.diagnostics.preflight import run_preflight_diagnostics
+from core.agent_catalog import get_api_catalog, get_agent_spec, resolve_agent_role
 from config.settings import config
 from tracker.tracker_core import swarm_tracker, EntryType, Status
 
@@ -78,6 +81,11 @@ class LoginRequest(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     token: str
+
+
+class WebhookTaskRequest(BaseModel):
+    payload: dict = {}
+    source: str = "webhook"
 
 
 @app.post("/login")
@@ -146,44 +154,67 @@ async def health_check():
 
 @app.get("/agents")
 async def list_agents(user=Depends(get_current_user)):
-    agent_roles = [
-        "wordpress_tech",
-        "seo_agent",
-        "data_analyser",
-        "integration_agent",
-        "erpnext_agent",
-        "erpnext_dev_agent",
-        "devops_agent",
-        "design_agent",
-        "growth_agent",
-        "campaign_planner_agent",
-        "email_marketing_agent",
-        "google_agent",
-        "fb_campaign_manager",
-        "smo_agent",
-        "skill_agent",
-        "training_agent",
-        "agent_builder",
-        "server_agent",
-    ]
-    return [{"role": role, "status": "online", "capabilities": ["autonomous", "subagent_spawn"]} for role in agent_roles]
+    include_deprecated = os.getenv("API_INCLUDE_DEPRECATED_AGENTS", "false").lower() in ("1", "true", "yes")
+    catalog = get_api_catalog(include_deprecated=include_deprecated)
+    return [{**entry, "status": "online"} for entry in catalog]
 
 
 @app.post("/task")
 async def assign_task(request: TaskRequest, user=Depends(get_current_user)):
+    return _publish_task(
+        agent_role=request.agent_role,
+        task_type=request.task_type,
+        payload=request.payload,
+        source_agent="api_gateway",
+        username=user.get("sub", "system"),
+    )
+
+
+def _publish_task(agent_role: str, task_type: str, payload: dict, source_agent: str, username: str = "system"):
+    spec = get_agent_spec(agent_role)
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"Unknown agent_role: {agent_role}")
+    routed_role = resolve_agent_role(agent_role)
+
     redis_client = db_manager.get_redis_client()
     task_id = str(uuid.uuid4())
 
     message = {
-        "source_agent": "api_gateway",
+        "source_agent": source_agent,
         "task_id": task_id,
-        "task": {"type": request.task_type, **request.payload},
-        "user": user.get("sub", "system"),
+        "task": {"type": task_type, **(payload or {})},
+        "user": username,
     }
 
-    target_channel = f"task_queue_{request.agent_role}"
+    target_channel = f"task_queue_{routed_role}"
     redis_client.publish(target_channel, json.dumps(message))
-    return {"status": "success", "task_id": task_id, "agent": request.agent_role}
+    return {
+        "status": "success",
+        "task_id": task_id,
+        "agent": agent_role,
+        "routed_to": routed_role,
+        "task_type": task_type,
+    }
+
+
+@app.post("/webhook/{agent_role}/{task_type}")
+async def webhook_task(
+    agent_role: str,
+    task_type: str,
+    request: WebhookTaskRequest,
+    x_webhook_secret: str = Header(default=""),
+):
+    if not config.WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook secret is not configured")
+    if x_webhook_secret != config.WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    return _publish_task(
+        agent_role=agent_role,
+        task_type=task_type,
+        payload=request.payload,
+        source_agent=request.source or "webhook",
+        username="webhook",
+    )
 
 
 @app.get("/logs")
@@ -199,6 +230,27 @@ async def get_logs(limit: int = 50, user=Depends(get_current_user)):
 @app.get("/tracker/entries")
 async def get_tracker_entries(user=Depends(get_current_user)):
     return swarm_tracker.get_entries()
+
+
+@app.get("/metrics/agent-efficiency-matrix")
+async def get_agent_efficiency_matrix(
+    limit: int = 1000,
+    hours: int | None = None,
+    user=Depends(get_current_user),
+):
+    redis_client = db_manager.get_redis_client()
+    try:
+        return build_agent_efficiency_matrix(redis_client=redis_client, limit=limit, hours=hours)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to build efficiency matrix: {e}")
+
+
+@app.get("/diagnostics/preflight")
+async def diagnostics_preflight(user=Depends(get_current_user)):
+    try:
+        return run_preflight_diagnostics()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to run preflight diagnostics: {e}")
 
 
 if __name__ == "__main__":

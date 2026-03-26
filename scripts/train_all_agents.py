@@ -8,6 +8,7 @@ import redis
 _PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 from core.db_connectors.db_manager import db_manager
+from core.agent_catalog import get_training_target_roles
 
 def train_swarm():
     print("🚀 Initializing Swarm-Wide Training...")
@@ -17,14 +18,8 @@ def train_swarm():
     with open(manual_path, "r") as f:
         manual_content = f.read()
 
-    # 2. Define all agents
-    agents = [
-        "wordpress_tech", "seo_agent", "data_analyser", "integration_agent",
-        "erpnext_agent", "erpnext_dev_agent", "devops_agent", "design_agent",
-        "growth_agent", "campaign_planner_agent", "email_marketing_agent",
-        "google_agent", "fb_campaign_manager", "smo_agent",
-        "skill_agent", "training_agent", "agent_builder", "server_agent"
-    ]
+    # 2. Define all canonical (non-deprecated) agents.
+    agents = get_training_target_roles()
 
     redis_client = db_manager.get_redis_client()
 

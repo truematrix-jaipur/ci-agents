@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 
-from vector_store import vector_store
+from agents.seo_agent.vector_store import vector_store
 
 logger = logging.getLogger("ci.reference_docs")
 

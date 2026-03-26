@@ -489,6 +489,38 @@ class VectorStore:
         )
         return action_id
 
+    def try_create_action_item(
+        self,
+        action_type: str,
+        priority: str,
+        title: str,
+        description: str,
+        target_url: str = "",
+        target_keyword: str = "",
+        implementation_data: dict = None,
+        snapshot_id: str = "",
+        data_signals: dict = None,
+    ) -> str | None:
+        """
+        Best-effort action creation.
+        Returns action_id on success, otherwise None without raising.
+        """
+        try:
+            return self.create_action_item(
+                action_type=action_type,
+                priority=priority,
+                title=title,
+                description=description,
+                target_url=target_url,
+                target_keyword=target_keyword,
+                implementation_data=implementation_data,
+                snapshot_id=snapshot_id,
+                data_signals=data_signals,
+            )
+        except Exception as e:
+            logger.warning(f"try_create_action_item failed: {e}")
+            return None
+
     def update_action_status(
         self,
         action_id: str,
@@ -961,6 +993,13 @@ class VectorStore:
     # ── Stats ──────────────────────────────────────────────────────────────
 
     def stats(self) -> dict:
+        def _safe_count(collection_name: str) -> int:
+            try:
+                return int(self._col(collection_name).count())
+            except Exception as e:
+                logger.warning(f"stats: failed count for {collection_name}: {e}")
+                return 0
+
         reference_docs_count = 0
         try:
             reference_docs_count = len(
@@ -973,12 +1012,12 @@ class VectorStore:
             reference_docs_count = 0
 
         return {
-            "gsc_data_count":    self._col(cfg.CHROMA_COLLECTION_GSC).count(),
-            "ga_data_count":     self._col(cfg.CHROMA_COLLECTION_GA).count(),
-            "action_items_count": self._col(cfg.CHROMA_COLLECTION_ACTIONS).count(),
-            "reports_count":     self._col(cfg.CHROMA_COLLECTION_REPORTS).count(),
-            "pages_count":       self._col(cfg.CHROMA_COLLECTION_PAGES).count(),
-            "metrics_count":     self._col(cfg.CHROMA_COLLECTION_METRICS).count(),
+            "gsc_data_count":    _safe_count(cfg.CHROMA_COLLECTION_GSC),
+            "ga_data_count":     _safe_count(cfg.CHROMA_COLLECTION_GA),
+            "action_items_count": _safe_count(cfg.CHROMA_COLLECTION_ACTIONS),
+            "reports_count":     _safe_count(cfg.CHROMA_COLLECTION_REPORTS),
+            "pages_count":       _safe_count(cfg.CHROMA_COLLECTION_PAGES),
+            "metrics_count":     _safe_count(cfg.CHROMA_COLLECTION_METRICS),
             "reference_docs_count": reference_docs_count,
             "snapshot_dates":    self.list_snapshot_dates()[:5],
             "ga_snapshot_dates": self.list_ga_snapshot_dates()[:5],

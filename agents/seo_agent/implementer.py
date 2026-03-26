@@ -13,8 +13,8 @@ from urllib.parse import urlparse
 import requests
 from requests.auth import HTTPBasicAuth
 
-from config import cfg
-from analyzer import analyzer
+from agents.seo_agent.seo_config import cfg
+from agents.seo_agent.analyzer import analyzer
 
 logger = logging.getLogger("ci.implementer")
 

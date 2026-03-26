@@ -52,9 +52,9 @@ class GSCClient:
         if not sa_path.exists() and getattr(cfg, 'GSC_FORCE_SERVICE_ACCOUNT', True):
             logger.error(f"GSC service account not found at {sa_path} and GSC_FORCE_SERVICE_ACCOUNT is enabled")
             try:
-                from vector_store import vector_store
+                from agents.seo_agent.vector_store import vector_store
 
-                vector_store.create_action_item(
+                vector_store.try_create_action_item(
                     action_type="FLAG_FOR_REVIEW",
                     priority="critical",
                     title="GSC Access: missing service account JSON",
@@ -66,7 +66,7 @@ class GSCClient:
             except Exception as e:
                 logger.warning(f"Could not create FLAG_FOR_REVIEW action: {e}")
             try:
-                from notifier import notifier
+                from agents.seo_agent.notifier import notifier
 
                 notifier.send_error_alert(
                     "GSC Missing Service Account",
@@ -154,7 +154,7 @@ class GSCClient:
 
             # Create a FLAG_FOR_REVIEW action and notify human operators with remediation steps
             try:
-                from vector_store import vector_store
+                from agents.seo_agent.vector_store import vector_store
 
                 sa_email = None
                 if sa_path.exists():
@@ -173,7 +173,7 @@ class GSCClient:
                 if sa_email:
                     desc += f"\nService account email: {sa_email}"
 
-                vector_store.create_action_item(
+                vector_store.try_create_action_item(
                     action_type="FLAG_FOR_REVIEW",
                     priority="critical",
                     title="GSC Access: service account/OAuth failure",
@@ -184,7 +184,7 @@ class GSCClient:
                 logger.warning(f"Could not create FLAG_FOR_REVIEW action: {e3}")
 
             try:
-                from notifier import notifier
+                from agents.seo_agent.notifier import notifier
 
                 notifier.send_error_alert(
                     "GSC Credential Error",

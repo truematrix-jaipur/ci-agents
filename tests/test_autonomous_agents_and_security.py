@@ -115,18 +115,15 @@ def test_erpnext_customer_lookup_parameterized(base_stubs):
 
 
 def test_notifier_uses_signed_token_links(monkeypatch):
-    cfg_mod = _load_module_from_path(
-        "ci_seo_config",
-        Path("/home/agents/ci-seo-agent/config.py"),
-    )
-    sys.modules["config"] = cfg_mod
+    from config.settings import config as swarm_cfg
+
     notifier_mod = _load_module_from_path(
-        "ci_seo_notifier",
-        Path("/home/agents/ci-seo-agent/notifier.py"),
+        "seo_notifier",
+        Path("/home/agents/agents/seo_agent/notifier.py"),
     )
 
     sent = {}
-    monkeypatch.setattr(notifier_mod.cfg, "API_SECRET", "test-secret", raising=False)
+    monkeypatch.setattr(swarm_cfg, "SEO_API_SECRET", "test-secret", raising=False)
 
     def _capture(self, to, subject, html_body):
         sent["to"] = to

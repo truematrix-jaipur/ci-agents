@@ -2,11 +2,12 @@ import sys
 import os
 import logging
 import json
+import requests
 
 # Append project root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.base_agent import BaseAgent
-from core.db_connectors.db_manager import db_manager
+from config.settings import config
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +38,39 @@ class ERPNextDevAgent(BaseAgent):
 
     def _create_doctype(self, task_data):
         doctype_name = task_data.get("task", {}).get("name")
-        return {"status": "success", "message": f"DocType {doctype_name} created (simulated)."}
+        module = task_data.get("task", {}).get("module", "Custom")
+        if not doctype_name:
+            return {"status": "error", "message": "name is required"}
+        if not (config.ERP_URL and config.ERP_API_KEY and config.ERP_API_SECRET):
+            return {"status": "error", "message": "ERP REST credentials are not configured"}
+        url = f"{config.ERP_URL.rstrip('/')}/api/resource/DocType"
+        headers = {
+            "Authorization": f"token {config.ERP_API_KEY}:{config.ERP_API_SECRET}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "name": doctype_name,
+            "module": module,
+            "custom": 1,
+            "istable": 0,
+            "track_changes": 1,
+        }
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=20)
+            if r.status_code >= 400:
+                return {"status": "error", "message": f"DocType create failed: HTTP {r.status_code} {r.text[:300]}"}
+            data = r.json().get("data", {})
+            return {"status": "success", "message": f"DocType {doctype_name} created.", "doctype": data.get("name")}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     def _apply_fix(self, task_data):
-        return {"status": "success", "message": "Code fix applied (simulated)."}
+        service = task_data.get("task", {}).get("service")
+        if not service:
+            return {"status": "error", "message": "service is required"}
+        # Delegate restart/fix action to server_agent so operations stay centralized.
+        delegated_id = self.publish_task_to_agent("server_agent", {"type": "fix_service", "service": service})
+        return {"status": "success", "message": f"Fix delegated for service {service}.", "delegated_task_id": delegated_id}
 
 if __name__ == "__main__":
     agent = ERPNextDevAgent()

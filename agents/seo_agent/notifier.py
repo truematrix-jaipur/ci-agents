@@ -13,12 +13,12 @@ import hmac
 import hashlib
 import base64
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
-from config import cfg
+from agents.seo_agent.seo_config import cfg
 
 logger = logging.getLogger("ci.notifier")
 
@@ -100,7 +100,7 @@ class Notifier:
 <body>
 <h1>🔍 CI SEO Agent — Daily Action Plan</h1>
 <p><strong>Report Date:</strong> {fetch_date} &nbsp;|&nbsp;
-   <strong>Generated:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
+   <strong>Generated:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
    <strong>Report ID:</strong> <code>{report_id}</code></p>
 
 <div class="summary-box">
@@ -186,7 +186,7 @@ class Notifier:
 
         subject = (
             f"[CI SEO Agent] Implementation Complete — "
-            f"{success_count} done, {fail_count} failed | {datetime.utcnow().strftime('%Y-%m-%d')}"
+            f"{success_count} done, {fail_count} failed | {datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
         )
 
         rows_html = ""
@@ -204,7 +204,7 @@ class Notifier:
 <!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#333;max-width:900px;margin:0 auto;padding:20px">
 <h1>✅ SEO Implementation Report</h1>
 <p><strong>Report ID:</strong> {report_id} &nbsp;|&nbsp;
-   <strong>Completed:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
+   <strong>Completed:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
    <strong>Duration:</strong> {duration_seconds:.1f}s</p>
 
 <div style="display:flex;gap:20px;margin:20px 0">
@@ -254,7 +254,7 @@ class Notifier:
         subject = (
             f"[CI SEO Agent] Weekly Impact Report — "
             f"{len(improved)} improved, {len(neutral)} neutral, {len(missing)} no data | "
-            f"{datetime.utcnow().strftime('%Y-%m-%d')}"
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
         )
 
         def delta_cell(val, invert=False) -> str:
@@ -329,7 +329,7 @@ class Notifier:
 </style></head>
 <body>
 <h1>📈 CI SEO Agent — Weekly Impact Report</h1>
-<p><strong>Measured:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
+<p><strong>Measured:</strong> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} &nbsp;|&nbsp;
    <strong>Actions analysed:</strong> {len(impact_results)} &nbsp;|&nbsp;
    <strong>Improved:</strong> {len(improved)} &nbsp;|&nbsp;
    <strong>Neutral:</strong> {len(neutral)} &nbsp;|&nbsp;
@@ -354,7 +354,7 @@ class Notifier:
 <html><body style="font-family:Arial,sans-serif;padding:20px">
 <h2 style="color:#e74c3c">⚠️ SEO Agent Error</h2>
 <p><strong>Type:</strong> {error_type}</p>
-<p><strong>Time:</strong> {datetime.utcnow().isoformat()} UTC</p>
+<p><strong>Time:</strong> {datetime.now(timezone.utc).isoformat()} UTC</p>
 <pre style="background:#f8f8f8;padding:15px;border-radius:5px;white-space:pre-wrap">{message}</pre>
 </body></html>"""
         return self._send_email(APPROVAL_EMAIL, subject, html_body)
@@ -432,7 +432,7 @@ class Notifier:
         missing_events = completeness.get("missing_events", [])
         found_events = completeness.get("found_events", {})
         event_rows = ""
-        from ga4_conversion_auditor import EXPECTED_EVENTS
+        from agents.seo_agent.ga4_conversion_auditor import EXPECTED_EVENTS
         for ev in EXPECTED_EVENTS:
             if ev in found_events:
                 count = found_events[ev].get("count", 0)

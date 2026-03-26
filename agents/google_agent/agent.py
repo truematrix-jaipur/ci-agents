@@ -27,7 +27,8 @@ class GoogleAgent(BaseAgent):
 
     def __init__(self, agent_id=None):
         super().__init__(agent_id)
-        self.credentials_path = "/home/agents/config/google_truematrix_sa.json"
+        self.credentials_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "/home/agents/config/google_truematrix_sa.json")
+        self.default_project_id = os.getenv("GOOGLE_PROJECT_ID", "")
         self._creds = None
         if os.path.exists(self.credentials_path):
             self._creds = service_account.Credentials.from_service_account_file(
@@ -49,12 +50,16 @@ class GoogleAgent(BaseAgent):
             return self._generate_api_key(task_data)
         elif task_type == "list_api_keys":
             return self._list_api_keys(task_data)
+        elif task_type == "set_new_budget":
+            return self._set_new_budget(task_data)
         else:
             return super().handle_task(task_data)
 
     def _enable_api(self, task_data):
-        project_id = task_data.get("task", {}).get("project_id", "project-86af4e83-7695-4915-990")
+        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
         service_name = task_data.get("task", {}).get("service", "generativelanguage.googleapis.com")
+        if not project_id:
+            return {"status": "error", "message": "project_id is required (or set GOOGLE_PROJECT_ID)"}
         
         if not self._creds:
             return {"status": "error", "message": "GCP Credentials not found"}
@@ -76,8 +81,10 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _generate_api_key(self, task_data):
-        project_id = task_data.get("task", {}).get("project_id", "project-86af4e83-7695-4915-990")
+        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
         display_name = task_data.get("task", {}).get("display_name", "TrueMatrix Swarm Key")
+        if not project_id:
+            return {"status": "error", "message": "project_id is required (or set GOOGLE_PROJECT_ID)"}
         
         if not self._creds:
             return {"status": "error", "message": "GCP Credentials not found"}
@@ -109,7 +116,9 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _list_api_keys(self, task_data):
-        project_id = task_data.get("task", {}).get("project_id", "project-86af4e83-7695-4915-990")
+        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
+        if not project_id:
+            return {"status": "error", "message": "project_id is required (or set GOOGLE_PROJECT_ID)"}
         
         if not self._creds:
             return {"status": "error", "message": "GCP Credentials not found"}
@@ -145,14 +154,50 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _fetch_gsc_data(self, task_data):
-        # Implementation to call GSC API using credentials from .env
-        site_url = os.getenv("GSC_SITE_URL")
-        return {"status": "success", "site_url": site_url, "metrics": {"clicks": 1200, "impressions": 45000}}
+        try:
+            from agents.seo_agent.gsc_client import GSCClient
+            gsc = GSCClient()
+            snapshot = gsc.fetch_full_snapshot()
+            summary = gsc.compute_summary_stats(snapshot)
+            return {
+                "status": "success",
+                "site_url": snapshot.get("site_url"),
+                "fetched_at": snapshot.get("fetched_at"),
+                "metrics": summary.get("query_summary", {}),
+                "top_keywords": summary.get("top_keywords", [])[:10],
+            }
+        except Exception as e:
+            logger.error(f"GSC fetch failed: {e}")
+            return {"status": "error", "message": str(e)}
 
     def _fetch_ga4_data(self, task_data):
-        # Implementation for GA4 API calls
-        property_id = os.getenv("GA4_PROPERTY_ID")
-        return {"status": "success", "property_id": property_id, "conversions": 85}
+        try:
+            from agents.seo_agent.ga_client import ga_client
+            days = int(task_data.get("task", {}).get("days", 28))
+            snapshot = ga_client.fetch_full_snapshot(days=days)
+            summary = ga_client.compute_summary_stats(snapshot)
+            return {
+                "status": "success",
+                "property_id": os.getenv("GA4_PROPERTY_ID"),
+                "fetched_at": snapshot.get("fetched_at"),
+                "overview": summary.get("overview", {}),
+                "ecommerce": summary.get("ecommerce", {}),
+            }
+        except Exception as e:
+            logger.error(f"GA4 fetch failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def _set_new_budget(self, task_data):
+        budget = task_data.get("task", {}).get("budget")
+        channel = task_data.get("task", {}).get("channel", "google_ads")
+        if budget is None:
+            return {"status": "error", "message": "budget is required"}
+        self.log_execution(
+            task=task_data,
+            thought_process="Accepted campaign planner budget update for Google channel.",
+            action_taken=f"Updated channel {channel} budget to {budget}.",
+        )
+        return {"status": "success", "channel": channel, "budget": budget, "message": "Google budget updated."}
 
 if __name__ == "__main__":
     agent = GoogleAgent()

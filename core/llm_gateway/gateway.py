@@ -24,7 +24,7 @@ class LLMGateway:
         else:
             self.gemini_client = None
 
-    def call_openai(self, messages, model="gpt-4-turbo", temperature=0.2):
+    def call_openai(self, messages, model="gpt-4o", temperature=0.2):
         if not self.openai_client:
             raise ValueError("OpenAI client not configured")
         
@@ -35,16 +35,16 @@ class LLMGateway:
         )
         return response.choices[0].message.content
 
-    def call_anthropic(self, prompt, system_prompt="", model="claude-3-opus-20240229", temperature=0.2):
+    def call_anthropic(self, prompt, system_prompt="", model="claude-sonnet-4-6", temperature=0.2):
         if not self.anthropic_client:
             raise ValueError("Anthropic client not configured")
-        
+
         response = self.anthropic_client.messages.create(
             model=model,
             system=system_prompt,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,
-            max_tokens=4000
+            max_tokens=8096,
         )
         return response.content[0].text
 

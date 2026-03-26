@@ -23,8 +23,12 @@ class SEOAgent(BaseAgent):
 
         if task_type == "full_audit":
             # 1. Spawn Speed Optimizer subagent
-            speed_report = self.spawn_subagent(SpeedOptimizerAgent, {"url": target_url})
-            
+            speed_report = {}
+            try:
+                speed_report = self.spawn_subagent(SpeedOptimizerAgent, {"url": target_url}) or {}
+            except Exception as e:
+                logger.error(f"SpeedOptimizerAgent failed: {e}")
+
             # 2. Ask Data Analyser for traffic data via PubSub
             # (In a real implementation, this would involve waiting for a callback/async response)
             data_req_payload = {
@@ -34,15 +38,15 @@ class SEOAgent(BaseAgent):
                 "params": [target_url],
             }
             self.publish_task_to_agent("data_analyser", data_req_payload)
-            
+
             # 3. Compile report
             audit_report = {
                 "status": "success",
                 "target_url": target_url,
                 "speed_metrics": speed_report.get("metrics", {}),
-                "speed_recommendations": speed_report.get("recommendations", [])
+                "speed_recommendations": speed_report.get("recommendations", []),
             }
-            
+
             self.log_execution(
                 task=task_data,
                 thought_process="Spawned SpeedOptimizer. Published to Data Analyser.",

@@ -20,16 +20,11 @@ class DataAnalyserAgent(BaseAgent):
     You have direct read access to `mysql_db` and `erpnext_mysql_db`.
     """
 
-    def __init__(self, agent_id=None):
-        super().__init__(agent_id)
-        self.mysql_conn = db_manager.get_mysql_connection()
-        self.erpnext_conn = db_manager.get_erpnext_mysql_connection()
-
     def handle_task(self, task_data):
         """Processes incoming requests from other agents."""
         logger.info(f"Data Analyser {self.agent_id} handling task: {task_data}")
         task_type = task_data.get("task", {}).get("type")
-        
+
         if task_type == "query_db":
             return self._execute_query(task_data)
         elif task_type == "analyze_metrics":
@@ -41,13 +36,18 @@ class DataAnalyserAgent(BaseAgent):
         query = task_data.get("task", {}).get("query")
         params = task_data.get("task", {}).get("params", [])
         db_target = task_data.get("task", {}).get("database", "mysql")
-        
+
         if not query:
             return {"status": "error", "message": "No query provided"}
 
-        conn = self.erpnext_conn if db_target == "erpnext" else self.mysql_conn
+        # Fetch a fresh connection per query to avoid using stale pool connections
+        conn = (
+            db_manager.get_erpnext_mysql_connection()
+            if db_target == "erpnext"
+            else db_manager.get_mysql_connection()
+        )
         if not conn:
-             return {"status": "error", "message": "Database connection failed"}
+            return {"status": "error", "message": "Database connection failed"}
 
         try:
             normalized = query.strip().lower()
@@ -75,6 +75,8 @@ class DataAnalyserAgent(BaseAgent):
         finally:
             if 'cursor' in locals() and cursor:
                 cursor.close()
+            if conn:
+                conn.close()
 
     def _analyze_metrics(self, task_data):
         raw_data = task_data.get("task", {}).get("data", [])

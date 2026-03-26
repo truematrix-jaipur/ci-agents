@@ -21,10 +21,6 @@ class ERPNextAgent(BaseAgent):
     CRITICAL: You never guess a customer or item name. You query the database 
     to find matching records or create new ones properly."""
 
-    def __init__(self, agent_id=None):
-        super().__init__(agent_id)
-        self.conn = db_manager.get_erpnext_mysql_connection()
-
     def handle_task(self, task_data):
         logger.info(f"ERPNext Agent {self.agent_id} handling task: {task_data}")
         task_type = task_data.get("task", {}).get("type")
@@ -41,11 +37,16 @@ class ERPNextAgent(BaseAgent):
         if not email:
             return {"status": "error", "message": "Email required for lookup"}
 
+        conn = db_manager.get_erpnext_mysql_connection()
+        if not conn:
+            return {"status": "error", "message": "ERPNext database connection failed"}
+
+        cursor = None
         try:
-            cursor = self.conn.cursor(dictionary=True)
+            cursor = conn.cursor(dictionary=True)
             cursor.execute("SELECT name FROM `tabCustomer` WHERE email_id = %s", (email,))
             customer = cursor.fetchone()
-            
+
             self.log_execution(
                 task=task_data,
                 thought_process=f"Looked up customer by email {email}",
@@ -55,6 +56,11 @@ class ERPNextAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Customer lookup failed: {e}")
             return {"status": "error", "message": str(e)}
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
 
     def _create_sales_order(self, task_data):
         # Implementation for creating a new Sales Order record via DB or Frappe REST API

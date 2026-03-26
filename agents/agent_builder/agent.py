@@ -2,9 +2,11 @@ import sys
 import os
 import logging
 import json
+from pathlib import Path
 
 # Append project root
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
 from core.base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
@@ -42,8 +44,8 @@ class AgentBuilder(BaseAgent):
         if not agent_name:
             return {"status": "error", "message": "Invalid agent name"}
 
-        # Define directory and file paths
-        agent_dir = f"/home/agents/agents/{agent_name}"
+        # Define directory and file paths relative to project root
+        agent_dir = str(_PROJECT_ROOT / "agents" / agent_name)
         agent_file = f"{agent_dir}/agent.py"
         init_file = f"{agent_dir}/__init__.py"
         

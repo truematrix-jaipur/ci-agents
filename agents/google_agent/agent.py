@@ -60,9 +60,9 @@ class GoogleAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "get_gsc_performance":
-            return self._fetch_gsc_data(task_data)
+            return self._execute_with_goal_target(task_data, self._fetch_gsc_data, "get_gsc_performance")
         elif task_type == "get_ga4_conversions":
-            return self._fetch_ga4_data(task_data)
+            return self._execute_with_goal_target(task_data, self._fetch_ga4_data, "get_ga4_conversions")
         elif task_type == "enable_gcp_api":
             return self._enable_api(task_data)
         elif task_type == "generate_api_key":
@@ -70,11 +70,11 @@ class GoogleAgent(BaseAgent):
         elif task_type == "list_api_keys":
             return self._list_api_keys(task_data)
         elif task_type == "set_new_budget":
-            return self._set_new_budget(task_data)
+            return self._execute_with_goal_target(task_data, self._set_new_budget, "set_new_budget")
         elif task_type == "enable_required_google_services":
             return self._enable_required_google_services(task_data)
         elif task_type == "fetch_multisite_marketing_data":
-            return self._fetch_multisite_marketing_data(task_data)
+            return self._execute_with_goal_target(task_data, self._fetch_multisite_marketing_data, "fetch_multisite_marketing_data")
         else:
             return super().handle_task(task_data)
 

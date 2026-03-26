@@ -40,39 +40,9 @@ class SEOAgent(BaseAgent):
         target_url = task_data.get("task", {}).get("url")
 
         if task_type == "full_audit":
-            # 1. Spawn Speed Optimizer subagent
-            speed_report = {}
-            try:
-                speed_report = self.spawn_subagent(SpeedOptimizerAgent, {"url": target_url}) or {}
-            except Exception as e:
-                logger.error(f"SpeedOptimizerAgent failed: {e}")
-
-            # 2. Ask Data Analyser for traffic data via PubSub
-            # (In a real implementation, this would involve waiting for a callback/async response)
-            data_req_payload = {
-                "type": "query_db",
-                "database": "mysql",
-                "query": "SELECT page_views FROM traffic_stats WHERE url = %s",
-                "params": [target_url],
-            }
-            self.publish_task_to_agent("data_analyser", data_req_payload)
-
-            # 3. Compile report
-            audit_report = {
-                "status": "success",
-                "target_url": target_url,
-                "speed_metrics": speed_report.get("metrics", {}),
-                "speed_recommendations": speed_report.get("recommendations", []),
-            }
-
-            self.log_execution(
-                task=task_data,
-                thought_process="Spawned SpeedOptimizer. Published to Data Analyser.",
-                action_taken="Generated partial audit report pending traffic data."
-            )
-            return audit_report
+            return self._execute_with_goal_target(task_data, self._full_audit, "full_audit")
         elif task_type == "run_autonomous_pipeline":
-            return self._run_pipeline(task_data)
+            return self._execute_with_goal_target(task_data, self._run_pipeline, "run_autonomous_pipeline")
         elif task_type == "get_latest_report":
             return self._get_latest_report(task_data)
         elif task_type == "list_pending_actions":
@@ -80,9 +50,9 @@ class SEOAgent(BaseAgent):
         elif task_type == "approve_report":
             return self._approve_report(task_data)
         elif task_type == "run_implementation":
-            return self._run_implementation(task_data)
+            return self._execute_with_goal_target(task_data, self._run_implementation, "run_implementation")
         elif task_type == "run_validation":
-            return self._run_validation(task_data)
+            return self._execute_with_goal_target(task_data, self._run_validation, "run_validation")
         elif task_type == "status":
             return self._status(task_data)
         elif task_type == "report_history":
@@ -123,6 +93,34 @@ class SEOAgent(BaseAgent):
             return self._train_reference_docs(task_data)
         else:
             return super().handle_task(task_data)
+
+    def _full_audit(self, task_data):
+        target_url = task_data.get("task", {}).get("url")
+        speed_report = {}
+        try:
+            speed_report = self.spawn_subagent(SpeedOptimizerAgent, {"url": target_url}) or {}
+        except Exception as e:
+            logger.error(f"SpeedOptimizerAgent failed: {e}")
+
+        data_req_payload = {
+            "type": "query_db",
+            "database": "mysql",
+            "query": "SELECT page_views FROM traffic_stats WHERE url = %s",
+            "params": [target_url],
+        }
+        self.publish_task_to_agent("data_analyser", data_req_payload)
+
+        self.log_execution(
+            task=task_data,
+            thought_process="Spawned SpeedOptimizer. Published to Data Analyser.",
+            action_taken="Generated partial audit report pending traffic data."
+        )
+        return {
+            "status": "success",
+            "target_url": target_url,
+            "speed_metrics": speed_report.get("metrics", {}),
+            "speed_recommendations": speed_report.get("recommendations", []),
+        }
 
     def _status(self, task_data):
         try:

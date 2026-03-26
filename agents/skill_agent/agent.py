@@ -26,13 +26,13 @@ class SkillAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "fetch_best_practices":
-            return self._fetch_best_practices(task_data)
+            return self._execute_with_goal_target(task_data, self._fetch_best_practices, "fetch_best_practices")
         elif task_type == "fetch_documentation":
-            return self._fetch_documentation(task_data)
+            return self._execute_with_goal_target(task_data, self._fetch_documentation, "fetch_documentation")
         elif task_type == "create_agent_skill":
-            return self._create_agent_skill(task_data)
+            return self._execute_with_goal_target(task_data, self._create_agent_skill, "create_agent_skill")
         elif task_type == "bootstrap_agent_skills":
-            return self._bootstrap_agent_skills(task_data)
+            return self._execute_with_goal_target(task_data, self._bootstrap_agent_skills, "bootstrap_agent_skills")
         elif task_type == "train_mcp_autonomy":
             return self._train_mcp_autonomy(task_data)
         elif task_type == "bootstrap_mcp_autonomy":

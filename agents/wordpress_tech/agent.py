@@ -27,15 +27,15 @@ class WordPressTechAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "health_check":
-            return self._health_check(task_data)
+            return self._execute_with_goal_target(task_data, self._health_check, "health_check")
         elif task_type == "implement_fix":
-            return self._implement_fix(task_data)
+            return self._execute_with_goal_target(task_data, self._implement_fix, "implement_fix")
         elif task_type == "update_plugin_code":
-            return self._update_plugin_code(task_data)
+            return self._execute_with_goal_target(task_data, self._update_plugin_code, "update_plugin_code")
         elif task_type == "update_theme_code":
-            return self._update_theme_code(task_data)
+            return self._execute_with_goal_target(task_data, self._update_theme_code, "update_theme_code")
         elif task_type == "woocommerce_rule_change":
-            return self._woocommerce_rule_change(task_data)
+            return self._execute_with_goal_target(task_data, self._woocommerce_rule_change, "woocommerce_rule_change")
         else:
             return super().handle_task(task_data)
 

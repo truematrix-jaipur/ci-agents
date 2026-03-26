@@ -31,9 +31,9 @@ class DataAnalyserAgent(BaseAgent):
         elif task_type == "analyze_metrics":
             return self._analyze_metrics(task_data)
         elif task_type == "summarize_sales_trend":
-            return self._summarize_sales_trend(task_data)
+            return self._execute_with_goal_target(task_data, self._summarize_sales_trend, "summarize_sales_trend")
         elif task_type == "autonomous_sales_monitor":
-            return self._autonomous_sales_monitor(task_data)
+            return self._execute_with_goal_target(task_data, self._autonomous_sales_monitor, "autonomous_sales_monitor")
         elif task_type == "manual_command":
             return self._handle_manual_command(task_data)
         else:

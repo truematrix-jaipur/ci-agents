@@ -46,19 +46,19 @@ class ServerAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type", "routine_audit")
 
         if task_type == "routine_audit":
-            return self._perform_full_audit(task_data)
+            return self._execute_with_goal_target(task_data, self._perform_full_audit, "routine_audit")
         elif task_type == "optimize_resources":
-            return self._optimize_resources(task_data)
+            return self._execute_with_goal_target(task_data, self._optimize_resources, "optimize_resources")
         elif task_type == "fix_service":
-            return self._fix_stuck_service(task_data)
+            return self._execute_with_goal_target(task_data, self._fix_stuck_service, "fix_service")
         elif task_type == "cleanup_storage":
-            return self._cleanup_storage(task_data)
+            return self._execute_with_goal_target(task_data, self._cleanup_storage, "cleanup_storage")
         elif task_type == "update_mcp_config":
             return self._update_mcp_config(task_data)
         elif task_type == "check_container_status":
-            return self._check_container_status(task_data)
+            return self._execute_with_goal_target(task_data, self._check_container_status, "check_container_status")
         elif task_type == "get_system_metrics":
-            return self._get_system_metrics(task_data)
+            return self._execute_with_goal_target(task_data, self._get_system_metrics, "get_system_metrics")
         else:
             return super().handle_task(task_data)
 

@@ -197,6 +197,8 @@ class LLMGateway:
         cli_result = self._execute_cli_fallback(prompt=prompt, system_prompt=system_prompt)
         if cli_result:
             return cli_result
-        raise last_exception
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("All LLM providers are unavailable or temporarily disabled. Check API keys and quota.")
 
 llm_gateway = LLMGateway()

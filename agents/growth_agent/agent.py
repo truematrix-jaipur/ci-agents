@@ -31,7 +31,7 @@ class GrowthAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "plan_quarterly_growth":
-            return self._plan_growth(task_data)
+            return self._execute_with_goal_target(task_data, self._plan_growth, "plan_quarterly_growth")
         elif task_type == "get_growth_plan_status":
             return self._get_growth_plan_status(task_data)
         else:

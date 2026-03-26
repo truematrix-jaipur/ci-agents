@@ -26,7 +26,7 @@ class EmailMarketingAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "send_newsletter":
-            return self._send_newsletter(task_data)
+            return self._execute_with_goal_target(task_data, self._send_newsletter, "send_newsletter")
         else:
             return super().handle_task(task_data)
 

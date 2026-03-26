@@ -23,14 +23,19 @@ class SMOResponsiveAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "post_update":
-            return self._post_update(task_data)
+            return self._execute_with_goal_target(task_data, self._post_update, "post_update")
         else:
             return super().handle_task(task_data)
 
     def _post_update(self, task_data):
         platform = task_data.get("task", {}).get("platform")
         content = task_data.get("task", {}).get("content")
-        return {"status": "success", "message": f"Posted to {platform}: {content[:20]}..."}
+        return {
+            "status": "success",
+            "platform": platform,
+            "post_published_count": 1,
+            "message": f"Posted to {platform}: {content[:20]}...",
+        }
 
 if __name__ == "__main__":
     agent = SMOResponsiveAgent()

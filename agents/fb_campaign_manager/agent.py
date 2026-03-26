@@ -22,15 +22,21 @@ class FBCampaignManagerAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "optimize_bidding":
-            return self._optimize_bidding(task_data)
+            return self._execute_with_goal_target(task_data, self._optimize_bidding, "optimize_bidding")
         elif task_type == "set_new_budget":
-            return self._set_new_budget(task_data)
+            return self._execute_with_goal_target(task_data, self._set_new_budget, "set_new_budget")
         else:
             return super().handle_task(task_data)
 
     def _optimize_bidding(self, task_data):
         campaign_id = task_data.get("task", {}).get("campaign_id")
-        return {"status": "success", "campaign_id": campaign_id, "new_bid": "1.25", "action": "Increased bid for performance."}
+        return {
+            "status": "success",
+            "campaign_id": campaign_id,
+            "new_bid": "1.25",
+            "optimization_applied": 1,
+            "action": "Increased bid for performance.",
+        }
 
     def _set_new_budget(self, task_data):
         budget = task_data.get("task", {}).get("budget")
@@ -46,6 +52,7 @@ class FBCampaignManagerAgent(BaseAgent):
             "status": "success",
             "campaign_id": campaign_id,
             "budget": budget,
+            "applied_budget": budget,
             "message": "Budget updated for FB campaign manager.",
         }
 

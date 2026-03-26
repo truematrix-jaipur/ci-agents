@@ -9,6 +9,7 @@ from googleapiclient.discovery import build
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.base_agent import BaseAgent
 from config.settings import config
+from agents.google_agent.google_multisite_collector import GoogleMultisiteCollector, DEFAULT_REQUIRED_APIS
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class GoogleAgent(BaseAgent):
         super().__init__(agent_id)
         self.credentials_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "/home/agents/config/google_truematrix_sa.json")
         self.default_project_id = os.getenv("GOOGLE_PROJECT_ID", "")
+        self.site_profiles = self._load_site_profiles()
         self._creds = None
         if os.path.exists(self.credentials_path):
             self._creds = service_account.Credentials.from_service_account_file(
@@ -36,14 +38,31 @@ class GoogleAgent(BaseAgent):
                 scopes=['https://www.googleapis.com/auth/cloud-platform']
             )
 
+    def _load_site_profiles(self):
+        raw = os.getenv("GOOGLE_SITE_PROFILES_JSON", "")
+        parsed = GoogleMultisiteCollector.parse_site_profiles(raw)
+        if parsed:
+            return parsed
+        # Backward-compatible fallback to single-site legacy config.
+        return [{
+            "site_id": "indogenmed",
+            "domain": "indogenmed.org",
+            "gsc_site_url": (os.getenv("GSC_SITE_URL") or "").strip() or "https://indogenmed.org/",
+            "ga4_property_id": (os.getenv("GA4_PROPERTY_ID") or "").strip(),
+            "canonical_url": "https://indogenmed.org/",
+            "woocommerce_url": os.getenv("WC_URL", "https://indogenmed.org").strip(),
+            "wc_ck": os.getenv("WC_INDOGENMED_CK", "").strip(),
+            "wc_cs": os.getenv("WC_INDOGENMED_CS", "").strip(),
+        }]
+
     def handle_task(self, task_data):
         logger.info(f"Google Agent {self.agent_id} handling task: {task_data}")
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "get_gsc_performance":
-            return self._fetch_gsc_data(task_data)
+            return self._execute_with_goal_target(task_data, self._fetch_gsc_data, "get_gsc_performance")
         elif task_type == "get_ga4_conversions":
-            return self._fetch_ga4_data(task_data)
+            return self._execute_with_goal_target(task_data, self._fetch_ga4_data, "get_ga4_conversions")
         elif task_type == "enable_gcp_api":
             return self._enable_api(task_data)
         elif task_type == "generate_api_key":
@@ -51,9 +70,69 @@ class GoogleAgent(BaseAgent):
         elif task_type == "list_api_keys":
             return self._list_api_keys(task_data)
         elif task_type == "set_new_budget":
-            return self._set_new_budget(task_data)
+            return self._execute_with_goal_target(task_data, self._set_new_budget, "set_new_budget")
+        elif task_type == "enable_required_google_services":
+            return self._enable_required_google_services(task_data)
+        elif task_type == "fetch_multisite_marketing_data":
+            return self._execute_with_goal_target(task_data, self._fetch_multisite_marketing_data, "fetch_multisite_marketing_data")
         else:
             return super().handle_task(task_data)
+
+    def _collector(self):
+        if not os.path.exists(self.credentials_path):
+            raise RuntimeError(f"Google service account JSON not found at {self.credentials_path}")
+        return GoogleMultisiteCollector(
+            credentials_path=self.credentials_path,
+            google_api_key=os.getenv("GOOGLE_API_KEY", ""),
+        )
+
+    def _enable_required_google_services(self, task_data):
+        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
+        requested = task_data.get("task", {}).get("services") or DEFAULT_REQUIRED_APIS
+        try:
+            collector = self._collector()
+            result = collector.enable_required_apis(project_id=project_id, required_apis=requested)
+            return {
+                "status": result.get("status", "error"),
+                "message": "Google API service enablement completed",
+                "result": result,
+            }
+        except Exception as e:
+            logger.error(f"Failed to enable required Google services: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def _fetch_multisite_marketing_data(self, task_data):
+        days = int(task_data.get("task", {}).get("days", 28))
+        profiles = task_data.get("task", {}).get("site_profiles") or self.site_profiles
+        output_file = task_data.get("task", {}).get("output_file", "")
+
+        try:
+            collector = self._collector()
+            data = collector.fetch_all_sites(site_profiles=profiles, days=days)
+            if output_file:
+                os.makedirs(os.path.dirname(output_file), exist_ok=True)
+                with open(output_file, "w", encoding="utf-8") as fp:
+                    json.dump(data, fp, indent=2)
+            return {
+                "status": "success",
+                "message": f"Fetched multi-site marketing data for {len(data.get('sites', []))} sites",
+                "summary": {
+                    "sites": [
+                        {
+                            "site_id": s.get("site_id"),
+                            "status": s.get("status"),
+                            "errors": s.get("errors", []),
+                        }
+                        for s in data.get("sites", [])
+                    ],
+                    "accessible_gsc_sites": len(data.get("accessible_gsc_sites", [])),
+                    "errors": data.get("errors", []),
+                },
+                "output_file": output_file or None,
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch multi-site marketing data: {e}")
+            return {"status": "error", "message": str(e)}
 
     def _enable_api(self, task_data):
         project_id = task_data.get("task", {}).get("project_id", self.default_project_id)

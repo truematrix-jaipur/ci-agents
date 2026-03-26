@@ -1,0 +1,4 @@
+[core]
+account = agents@ci-agents.iam.gserviceaccount.com
+project = ci-agents
+

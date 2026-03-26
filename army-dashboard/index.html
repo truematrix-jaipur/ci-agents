@@ -34,7 +34,7 @@
         const { Shield, Search, Database, RefreshCw, Layers, Layout, TrendingUp, Mail, Share2, Palette, Settings, Terminal, MessageSquare, Activity, ChevronRight, Play, Cpu, Box, Globe, Zap, BookOpen, Hammer, ShieldAlert, Bug, Rocket, Construction, LogOut, User, Lock, ExternalLink } = LucideReact;
 
         const API_BASE = "/army-api";
-        const GOOGLE_CLIENT_ID = "1060185715012-siki6kjg9gd8vflp7oqv4uj7kj3laqjm.apps.googleusercontent.com";
+        const FALLBACK_GOOGLE_CLIENT_ID = "1060185715012-siki6kjg9gd8vflp7oqv4uj7kj3laqjm.apps.googleusercontent.com";
         const CHAT_STATE_KEY = "tm_dispatch_state_v1";
         const AGENT_ALIASES = {
             integrator_agent: "integration_agent",
@@ -74,6 +74,8 @@
             const [loading, setLoading] = useState(true);
             const [loginEmail, setLoginEmail] = useState("");
             const [loginPassword, setLoginPassword] = useState("");
+            const [googleEnabled, setGoogleEnabled] = useState(false);
+            const [googleClientId, setGoogleClientId] = useState(FALLBACK_GOOGLE_CLIENT_ID);
             const [showSuggestions, setShowSuggestions] = useState(false);
             const [filteredAgents, setFilteredAgents] = useState([]);
             const [chatEvents, setChatEvents] = useState([]);
@@ -105,7 +107,7 @@
                     return () => clearInterval(interval);
                 }
                 setLoading(false);
-                initGoogle();
+                loadGoogleConfig();
             }, []);
 
             const getSession = () => {
@@ -135,13 +137,31 @@
             };
 
             const initGoogle = () => {
+                if (!googleEnabled || !googleClientId) return;
                 if (window.google) {
                     window.google.accounts.id.initialize({
-                        client_id: GOOGLE_CLIENT_ID,
+                        client_id: googleClientId,
                         callback: (resp) => handleAuth(`${API_BASE}/google-login`, { token: resp.credential })
                     });
                 } else setTimeout(initGoogle, 200);
             };
+
+            const loadGoogleConfig = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/auth/google-config`);
+                    const data = await res.json();
+                    if (res.ok && data?.enabled && data?.client_id) {
+                        setGoogleEnabled(true);
+                        setGoogleClientId(data.client_id);
+                        return;
+                    }
+                } catch (e) {}
+                setGoogleEnabled(false);
+            };
+
+            useEffect(() => {
+                initGoogle();
+            }, [googleEnabled, googleClientId]);
 
             const handleAuth = async (url, body) => {
                 try {
@@ -418,9 +438,10 @@
                                 <input type="password" placeholder="Password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-3 px-4 focus:border-brand-500 outline-none" required />
                                 <button type="submit" className="w-full bg-brand-500 hover:bg-brand-600 text-white font-bold py-4 rounded-2xl transition-all">Enter Dashboard</button>
                                 <div className="pt-4 border-t border-slate-800 mt-6 text-center">
-                                    <button type="button" onClick={() => window.google.accounts.id.prompt()} className="w-full flex items-center justify-center gap-3 bg-white text-slate-900 font-bold py-3 rounded-2xl transition-all hover:bg-slate-100">
+                                    <button type="button" disabled={!googleEnabled} onClick={() => window.google?.accounts?.id?.prompt?.()} className={`w-full flex items-center justify-center gap-3 font-bold py-3 rounded-2xl transition-all ${googleEnabled ? 'bg-white text-slate-900 hover:bg-slate-100' : 'bg-slate-800 text-slate-500 cursor-not-allowed'}`}>
                                         Continue with Google
                                     </button>
+                                    {!googleEnabled && <p className="text-[11px] text-slate-500 mt-2">Google login is not configured on server.</p>}
                                 </div>
                             </form>
                         </div>

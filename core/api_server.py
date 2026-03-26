@@ -121,6 +121,16 @@ class WebhookTaskRequest(BaseModel):
     source: str = "webhook"
 
 
+def _is_allowed_google_user(email: str) -> bool:
+    normalized = (email or "").strip().lower()
+    if not normalized or "@" not in normalized:
+        return False
+    if normalized in set(config.GOOGLE_ALLOWED_EMAILS):
+        return True
+    domain = normalized.split("@", 1)[1]
+    return domain in set(config.GOOGLE_ALLOWED_DOMAINS)
+
+
 @app.post("/login")
 async def login(request: LoginRequest):
     if not VALID_USERS:
@@ -153,6 +163,8 @@ async def login(request: LoginRequest):
 @app.post("/google-login")
 async def google_login(request: GoogleLoginRequest):
     try:
+        if not config.GOOGLE_CLIENT_ID:
+            raise HTTPException(status_code=503, detail="Google login is not configured")
         idinfo = id_token.verify_oauth2_token(
             request.token,
             google_requests.Request(),
@@ -162,8 +174,9 @@ async def google_login(request: GoogleLoginRequest):
         email = idinfo.get("email")
         name = idinfo.get("name", email.split("@")[0])
 
-        if not email or not email.endswith("@truematrix.io"):
-            raise HTTPException(status_code=403, detail="Only @truematrix.io emails are authorized")
+        if not _is_allowed_google_user(email):
+            allowed = ", ".join(config.GOOGLE_ALLOWED_DOMAINS) or "configured domains"
+            raise HTTPException(status_code=403, detail=f"Google account is not authorized. Allowed domains: {allowed}")
 
         token = jwt.encode(
             {
@@ -176,8 +189,19 @@ async def google_login(request: GoogleLoginRequest):
         )
 
         return {"status": "success", "token": token, "user": {"email": email, "name": name}}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Google auth failed: {str(e)}")
+
+
+@app.get("/auth/google-config")
+async def get_google_auth_config():
+    return {
+        "enabled": bool(config.GOOGLE_CLIENT_ID),
+        "client_id": config.GOOGLE_CLIENT_ID or "",
+        "allowed_domains": config.GOOGLE_ALLOWED_DOMAINS,
+    }
 
 
 @app.get("/health")

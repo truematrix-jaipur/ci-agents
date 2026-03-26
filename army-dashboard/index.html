@@ -35,6 +35,12 @@
 
         const API_BASE = "/army-api";
         const GOOGLE_CLIENT_ID = "1060185715012-siki6kjg9gd8vflp7oqv4uj7kj3laqjm.apps.googleusercontent.com";
+        const CHAT_STATE_KEY = "tm_dispatch_state_v1";
+        const AGENT_ALIASES = {
+            integrator_agent: "integration_agent",
+            integrationagent: "integration_agent",
+            data_analyzer: "data_analyser",
+        };
 
         const AGENT_LIST = [
             { id: "wordpress_tech", name: "WP Tech", icon: Globe, color: "text-blue-400" },
@@ -70,16 +76,30 @@
             const [loginPassword, setLoginPassword] = useState("");
             const [showSuggestions, setShowSuggestions] = useState(false);
             const [filteredAgents, setFilteredAgents] = useState([]);
+            const [chatEvents, setChatEvents] = useState([]);
+            const [activeTasks, setActiveTasks] = useState([]);
             const scrollRef = useRef(null);
             const textareaRef = useRef(null);
+            const chatEventsRef = useRef(new Set());
 
             useEffect(() => {
                 const saved = localStorage.getItem('tm_session');
+                const savedChatState = localStorage.getItem(CHAT_STATE_KEY);
+                if (savedChatState) {
+                    try {
+                        const parsed = JSON.parse(savedChatState);
+                        if (Array.isArray(parsed.chatEvents)) mergeChatEvents(parsed.chatEvents);
+                        if (Array.isArray(parsed.activeTasks)) setActiveTasks(parsed.activeTasks.slice(0, 25));
+                    } catch (e) {
+                        console.warn("Failed to parse dispatch state", e);
+                    }
+                }
                 if (saved) {
                     const session = JSON.parse(saved);
                     setIsLoggedIn(true);
                     setUser(session.user);
                     refreshData(session.token);
+                    fetchChatEvents(session.token);
                     const interval = setInterval(() => refreshData(session.token), 5000);
                     return () => clearInterval(interval);
                 }
@@ -109,12 +129,14 @@
                         setIsLoggedIn(true);
                         setUser(data.user);
                         refreshData(data.token);
+                        fetchChatEvents(data.token);
                     } else alert(data.detail || "Auth failed");
                 } catch (e) { alert("Connection error"); }
             };
 
             const handleLogout = () => {
                 localStorage.removeItem('tm_session');
+                localStorage.removeItem(CHAT_STATE_KEY);
                 setIsLoggedIn(false);
                 window.location.reload();
             };
@@ -135,14 +157,80 @@
             const sendTask = async (agentId, type, payload = {}) => {
                 const session = JSON.parse(localStorage.getItem('tm_session'));
                 try {
-                    await fetch(`${API_BASE}/task`, {
+                    const res = await fetch(`${API_BASE}/task`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.token}` },
                         body: JSON.stringify({ agent_role: agentId, task_type: type, payload })
                     });
+                    const data = await res.json();
                     refreshData(session.token);
+                    return data;
                 } catch (e) { alert("Task failed"); }
+                return null;
             };
+
+            const eventKey = (ev) => `${ev.task_id || ""}|${ev.timestamp || ""}|${ev.event_type || ""}|${ev.message || ""}`;
+
+            const mergeChatEvents = (events = []) => {
+                setChatEvents((prev) => {
+                    const merged = [...prev];
+                    events.forEach((ev) => {
+                        const key = eventKey(ev);
+                        if (!chatEventsRef.current.has(key)) {
+                            chatEventsRef.current.add(key);
+                            merged.push(ev);
+                        }
+                    });
+                    merged.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+                    return merged.slice(-200);
+                });
+            };
+
+            useEffect(() => {
+                localStorage.setItem(CHAT_STATE_KEY, JSON.stringify({
+                    chatEvents: chatEvents.slice(-200),
+                    activeTasks: activeTasks.slice(0, 25)
+                }));
+            }, [chatEvents, activeTasks]);
+
+            const fetchTaskEvents = async (taskId) => {
+                const session = JSON.parse(localStorage.getItem('tm_session'));
+                if (!session?.token || !taskId) return;
+                try {
+                    const res = await fetch(`${API_BASE}/task/${taskId}/events?limit=300`, {
+                        headers: { 'Authorization': `Bearer ${session.token}` }
+                    });
+                    const data = await res.json();
+                    if (Array.isArray(data?.events)) {
+                        mergeChatEvents(data.events);
+                    }
+                } catch (e) {
+                    console.error("task events fetch failed", e);
+                }
+            };
+
+            const fetchChatEvents = async (token) => {
+                if (!token) return;
+                try {
+                    const res = await fetch(`${API_BASE}/chat/events?limit=300`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    const data = await res.json();
+                    if (Array.isArray(data?.events)) {
+                        mergeChatEvents(data.events);
+                    }
+                } catch (e) {
+                    console.error("chat events fetch failed", e);
+                }
+            };
+
+            useEffect(() => {
+                if (!activeTasks.length) return;
+                const interval = setInterval(() => {
+                    activeTasks.forEach((taskId) => fetchTaskEvents(taskId));
+                }, 1500);
+                return () => clearInterval(interval);
+            }, [activeTasks]);
 
             const handleChatChange = (e) => {
                 const val = e.target.value;
@@ -177,7 +265,7 @@
                 if (textareaRef.current) textareaRef.current.focus();
             };
 
-            const handleChatSubmit = (e) => {
+            const handleChatSubmit = async (e) => {
                 if (e) e.preventDefault();
                 if (!chatMessage.trim()) return;
                 
@@ -187,14 +275,30 @@
                 const match = chatMessage.match(/@(\w+)/);
                 if (match) {
                     const mentionedId = match[1];
-                    const agentExists = AGENT_LIST.find(a => a.id === mentionedId);
+                    const mappedMention = AGENT_ALIASES[mentionedId] || mentionedId;
+                    const agentExists = AGENT_LIST.find(a => a.id === mappedMention);
                     if (agentExists) {
-                        targetId = mentionedId;
+                        targetId = mappedMention;
                         cleanMessage = chatMessage.replace(`@${mentionedId}`, "").trim();
                     }
                 }
 
-                sendTask(targetId, "manual_command", { command: cleanMessage });
+                const userEvent = {
+                    timestamp: new Date().toISOString(),
+                    task_id: "",
+                    agent_role: "user",
+                    event_type: "user_command",
+                    status: "info",
+                    message: cleanMessage,
+                    payload: { target_agent: targetId }
+                };
+                mergeChatEvents([userEvent]);
+
+                const dispatchResult = await sendTask(targetId, "manual_command", { command: cleanMessage });
+                if (dispatchResult?.task_id) {
+                    setActiveTasks((prev) => Array.from(new Set([dispatchResult.task_id, ...prev])).slice(0, 25));
+                    fetchTaskEvents(dispatchResult.task_id);
+                }
                 setChatMessage("");
                 setShowSuggestions(false);
                 if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -316,10 +420,35 @@
                                             </div>
                                         )}
 
-                                        <div className="flex-1 text-slate-500 text-xs italic p-2 space-y-2">
+                                        <div className="flex-1 min-h-0 flex flex-col gap-3">
+                                            <div className="flex-1 overflow-y-auto bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
+                                                {chatEvents.length === 0 && (
+                                                    <div className="text-slate-500 text-xs italic">No chat activity yet.</div>
+                                                )}
+                                                {chatEvents.map((ev, idx) => {
+                                                    const isUser = ev.agent_role === "user";
+                                                    const tone = isUser
+                                                        ? "bg-brand-500/10 border-brand-500/30"
+                                                        : ev.status === "error"
+                                                            ? "bg-red-500/10 border-red-500/30"
+                                                            : "bg-slate-900 border-slate-700";
+                                                    return (
+                                                        <div key={`${ev.task_id || "local"}-${idx}`} className={`border rounded-lg px-3 py-2 text-xs ${tone}`}>
+                                                            <div className="flex items-center justify-between mb-1 text-[10px] text-slate-400">
+                                                                <span className="font-semibold">{isUser ? "You" : (ev.agent_role || "agent")}</span>
+                                                                <span>{new Date(ev.timestamp || Date.now()).toLocaleTimeString()}</span>
+                                                            </div>
+                                                            <div className="text-slate-200 whitespace-pre-wrap break-words">{ev.message}</div>
+                                                            {ev.task_id && <div className="mt-1 text-[10px] text-slate-500 font-mono">{ev.task_id}</div>}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                            <div className="text-slate-500 text-xs italic p-2 space-y-2">
                                             <p>Type @ to mention a specific agent.</p>
                                             <p>Shift + Enter for new line.</p>
                                             <p>Agents will now respond directly here.</p>
+                                            </div>
                                         </div>
 
                                         <form onSubmit={handleChatSubmit} className="mt-auto relative">

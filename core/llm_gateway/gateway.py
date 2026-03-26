@@ -6,6 +6,8 @@ import logging
 import sys
 import time
 import random
+import shlex
+import subprocess
 
 # Append project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -75,6 +77,59 @@ class LLMGateway:
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
+    def _default_cli_command(self, cli_name: str, full_prompt: str) -> str:
+        escaped = shlex.quote(full_prompt)
+        defaults = {
+            "codex": f"codex exec {escaped}",
+            "claude": f"claude -p {escaped}",
+            "copilot": f"copilot chat --prompt {escaped}",
+            "gemini": f"gemini -p {escaped}",
+        }
+        return defaults.get(cli_name, f"{cli_name} {escaped}")
+
+    def _execute_cli_fallback(self, prompt: str, system_prompt: str = "") -> str | None:
+        if not getattr(config, "LLM_CLI_FALLBACK_ENABLED", False):
+            return None
+
+        combined_prompt = prompt.strip()
+        if system_prompt and system_prompt.strip():
+            combined_prompt = f"{system_prompt.strip()}\n\nUser:\n{combined_prompt}"
+
+        configured = getattr(config, "LLM_CLI_COMMANDS", {}) or {}
+        cli_order = getattr(config, "LLM_CLI_ORDER", []) or []
+        timeout_seconds = max(10, int(getattr(config, "LLM_CLI_TIMEOUT_SECONDS", 120)))
+
+        for cli_name in cli_order:
+            template = configured.get(cli_name)
+            if template:
+                command = template.format(
+                    prompt=shlex.quote(prompt),
+                    system_prompt=shlex.quote(system_prompt),
+                    full_prompt=shlex.quote(combined_prompt),
+                )
+            else:
+                command = self._default_cli_command(cli_name, combined_prompt)
+            try:
+                logger.warning(f"Trying CLI LLM fallback via {cli_name}")
+                proc = subprocess.run(
+                    ["bash", "-lc", command],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                )
+                if proc.returncode != 0:
+                    stderr = (proc.stderr or "").strip()
+                    logger.warning(f"CLI fallback failed ({cli_name}): {stderr or 'non-zero exit'}")
+                    continue
+                stdout = (proc.stdout or "").strip()
+                if stdout:
+                    return stdout
+                logger.warning(f"CLI fallback produced empty output ({cli_name})")
+            except Exception as e:
+                logger.warning(f"CLI fallback exception ({cli_name}): {e}")
+        return None
+
     def execute(self, prompt, provider="anthropic", system_prompt="", retries=2, **kwargs):
         """Unified entry point with Retry AND Multi-Provider Fallback logic"""
         
@@ -108,6 +163,9 @@ class LLMGateway:
 
         # If we get here, all providers failed
         logger.critical(f"ALL LLM providers failed. Last error: {last_exception}")
+        cli_result = self._execute_cli_fallback(prompt=prompt, system_prompt=system_prompt)
+        if cli_result:
+            return cli_result
         raise last_exception
 
 llm_gateway = LLMGateway()

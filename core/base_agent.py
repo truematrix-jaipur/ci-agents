@@ -48,6 +48,37 @@ class BaseAgent:
         logger.info(f"Initialized {self.AGENT_ROLE} agent with ID: {self.agent_id}")
         logger.info(f"Listening on channels: {self.role_channel}, {self.specific_channel}")
 
+    def _task_id_from_context(self, task_context):
+        if isinstance(task_context, dict):
+            return task_context.get("task_id")
+        return None
+
+    def _publish_task_event(self, task_context, event_type, message, status="info", payload=None):
+        """Persist per-task events for dashboard chat timeline + stream."""
+        task_id = self._task_id_from_context(task_context)
+        if not task_id:
+            return
+        event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "task_id": task_id,
+            "agent_role": self.AGENT_ROLE,
+            "agent_id": self.agent_id,
+            "event_type": event_type,
+            "status": status,
+            "message": message,
+            "payload": payload or {},
+        }
+        key = f"task_events:{task_id}"
+        try:
+            self.redis_client.rpush(key, json.dumps(event))
+            self.redis_client.expire(key, 3600)
+            self.redis_client.lpush("dashboard_recent_tasks", task_id)
+            self.redis_client.ltrim("dashboard_recent_tasks", 0, 199)
+            self.redis_client.expire("dashboard_recent_tasks", 3600 * 24)
+            self.redis_client.publish(f"task_response_{task_id}", json.dumps(event))
+        except Exception as e:
+            logger.error(f"Failed to publish task event for {task_id}: {e}")
+
     def log_execution(self, task, thought_process, action_taken, status="success"):
         """Logs execution to Redis for the UI Live Stream."""
         log_entry = {
@@ -67,6 +98,12 @@ class BaseAgent:
 
     def speak(self, message, task_context=None):
         """Sends a direct message to the user UI via the execution log."""
+        self._publish_task_event(
+            task_context=task_context,
+            event_type="agent_message",
+            message=message,
+            status="info",
+        )
         self.log_execution(
             task=task_context or "Direct Communication",
             thought_process="Communicating with user via Chat.",
@@ -132,9 +169,23 @@ class BaseAgent:
                 if message and message['type'] == 'message':
                     data = json.loads(message['data'])
                     logger.info(f"Processing task: {data}")
+                    self._publish_task_event(
+                        task_context=data,
+                        event_type="accepted",
+                        message=f"{self.AGENT_ROLE} accepted task",
+                        status="info",
+                        payload={"task_type": data.get("task", {}).get("type")},
+                    )
                     
                     try:
                         result = self.handle_task(data)
+                        self._publish_task_event(
+                            task_context=data,
+                            event_type="completed",
+                            message="Task completed",
+                            status="success",
+                            payload=result if isinstance(result, dict) else {"result": str(result)},
+                        )
                         # If handling is successful but silent, send a wrap-up
                         if result and isinstance(result, dict):
                             msg = result.get("message", "Task completed successfully.")
@@ -144,6 +195,12 @@ class BaseAgent:
                     except Exception as e:
                         error_msg = f"❌ Error executing task: {str(e)}"
                         logger.error(error_msg)
+                        self._publish_task_event(
+                            task_context=data,
+                            event_type="failed",
+                            message=error_msg,
+                            status="error",
+                        )
                         self.speak(error_msg, task_context=data)
                         
                 time.sleep(0.1)

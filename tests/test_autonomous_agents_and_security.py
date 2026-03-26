@@ -101,6 +101,58 @@ def test_data_analyser_parameterized_query(base_stubs):
     assert conn.cursor_obj.executed[0][1] == ("https://x",)
 
 
+def test_data_analyser_manual_sales_trend_command(base_stubs):
+    from agents.data_analyser.agent import DataAnalyserAgent
+
+    rows = [
+        {"day": "2026-03-20", "orders": 3, "revenue": 100.0},
+        {"day": "2026-03-21", "orders": 2, "revenue": 80.0},
+    ]
+    conn = FakeConn(rows=rows)
+    agent = _mk_agent(DataAnalyserAgent, mysql_conn=FakeConn(), erpnext_conn=conn)
+
+    res = agent.handle_task({"task": {"type": "manual_command", "command": "summarize last 7 days sales trend"}})
+    assert res["status"] == "success"
+    assert res["window_days"] == 7
+    assert "timeline" in res
+    assert "Sales trend (7d)" in res["summary"]
+
+
+def test_data_analyser_autonomous_sales_monitor_delegates_on_drop(base_stubs, monkeypatch):
+    from agents.data_analyser.agent import DataAnalyserAgent
+
+    # First half stronger than second half -> negative trend.
+    rows = [
+        {"day": "2026-03-20", "orders": 3, "revenue": 120.0},
+        {"day": "2026-03-21", "orders": 3, "revenue": 100.0},
+        {"day": "2026-03-22", "orders": 2, "revenue": 80.0},
+        {"day": "2026-03-23", "orders": 1, "revenue": 20.0},
+    ]
+    agent = _mk_agent(DataAnalyserAgent, mysql_conn=FakeConn(), erpnext_conn=FakeConn(rows=rows))
+    delegated = {}
+
+    def _capture(self, role, payload):
+        delegated["role"] = role
+        delegated["payload"] = payload
+        return "task-123"
+
+    monkeypatch.setattr(DataAnalyserAgent, "publish_task_to_agent", _capture, raising=False)
+    res = agent.handle_task(
+        {
+            "task": {
+                "type": "autonomous_sales_monitor",
+                "days": 4,
+                "drop_alert_pct": -5.0,
+                "auto_delegate": True,
+            }
+        }
+    )
+    assert res["status"] == "success"
+    assert res["alert_triggered"] is True
+    assert res["delegated_task_id"] == "task-123"
+    assert delegated["role"] == "growth_agent"
+
+
 def test_erpnext_customer_lookup_parameterized(base_stubs):
     from agents.erpnext_agent.agent import ERPNextAgent
 

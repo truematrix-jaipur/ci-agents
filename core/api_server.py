@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Any
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ import sys
 import uuid
 import datetime
 import threading
+import time
 from jose import jwt, JWTError, ExpiredSignatureError
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -35,7 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -68,6 +70,62 @@ def _autostart_loop(stop_event: threading.Event):
         stop_event.wait(max(5, config.AGENT_AUTOSTART_INTERVAL_SECONDS))
 
 
+def _is_terminal_event(event: dict) -> bool:
+    return (event or {}).get("event_type") in {"completed", "failed", "timed_out"}
+
+
+def _parse_event_time(ts: str) -> datetime.datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(ts)
+    except Exception:
+        return None
+
+
+def _task_timeout_guard_loop(stop_event: threading.Event):
+    redis_client = db_manager.get_redis_client()
+    timeout_s = max(10, int(config.TASK_SYNC_TIMEOUT_SECONDS))
+    while not stop_event.is_set():
+        try:
+            task_ids = redis_client.lrange("dashboard_recent_tasks", 0, 199)
+            now = datetime.datetime.utcnow()
+            for task_id in task_ids:
+                events = _get_task_events(task_id, limit=300)
+                if not events:
+                    continue
+                if any(_is_terminal_event(e) for e in events):
+                    continue
+                created = _parse_event_time(events[0].get("timestamp"))
+                if not created:
+                    continue
+                latest = _parse_event_time(events[-1].get("timestamp")) or created
+                age = (now - created).total_seconds()
+                idle = (now - latest).total_seconds()
+                accepted = any((e or {}).get("event_type") == "accepted" for e in events)
+                # If agent accepted the task, allow a much longer execution window.
+                max_age = max(timeout_s * 6, 180) if accepted else timeout_s
+                # Do not timeout while fresh activity continues.
+                if age < max_age or idle < timeout_s:
+                    continue
+                timeout_event = {
+                    "timestamp": now.isoformat(),
+                    "task_id": task_id,
+                    "agent_role": "api_gateway",
+                    "event_type": "timed_out",
+                    "status": "error",
+                    "message": f"Task timed out without terminal response (age={int(age)}s, idle={int(idle)}s)",
+                    "payload": {"timeout_seconds": timeout_s, "max_age_seconds": max_age, "idle_seconds": int(idle)},
+                }
+                key = f"task_events:{task_id}"
+                redis_client.rpush(key, json.dumps(timeout_event))
+                redis_client.expire(key, 3600)
+                redis_client.publish(f"task_response_{task_id}", json.dumps(timeout_event))
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Task timeout guard loop failed: {e}")
+        stop_event.wait(3)
+
+
 @app.on_event("startup")
 async def startup_event():
     if not config.AGENT_AUTOSTART_ENABLED:
@@ -77,6 +135,9 @@ async def startup_event():
     thread = threading.Thread(target=_autostart_loop, args=(stop_event,), daemon=True)
     app.state.autostart_thread = thread
     thread.start()
+    timeout_thread = threading.Thread(target=_task_timeout_guard_loop, args=(stop_event,), daemon=True)
+    app.state.task_timeout_guard_thread = timeout_thread
+    timeout_thread.start()
 
 
 @app.on_event("shutdown")
@@ -105,6 +166,15 @@ class TaskRequest(BaseModel):
     agent_role: str
     task_type: str
     payload: dict = {}
+
+
+class GoalTargetRequest(BaseModel):
+    metric: str
+    target_value: Any
+    comparator: str = "gte"
+    max_attempts: int = 3
+    retry_delay_seconds: float = 0.0
+    enabled: bool = True
 
 
 class LoginRequest(BaseModel):
@@ -297,6 +367,21 @@ def _publish_task(agent_role: str, task_type: str, payload: dict, source_agent: 
     }
 
 
+def _goal_store_key(agent_role: str) -> str:
+    return f"agent_goal_target:{resolve_agent_role(agent_role)}"
+
+
+def _normalize_goal_request(goal: GoalTargetRequest) -> dict[str, Any]:
+    return {
+        "enabled": bool(goal.enabled),
+        "metric": str(goal.metric).strip(),
+        "target_value": goal.target_value,
+        "comparator": str(goal.comparator or "gte").strip().lower(),
+        "max_attempts": max(1, int(goal.max_attempts)),
+        "retry_delay_seconds": max(0.0, float(goal.retry_delay_seconds)),
+    }
+
+
 @app.post("/webhook/{agent_role}/{task_type}")
 async def webhook_task(
     agent_role: str,
@@ -315,6 +400,42 @@ async def webhook_task(
         source_agent=request.source or "webhook",
         username="webhook",
     )
+
+
+@app.get("/agents/{agent_role}/goal-target")
+async def get_agent_goal_target(agent_role: str, user=Depends(get_current_user)):
+    if get_agent_spec(agent_role) is None:
+        raise HTTPException(status_code=400, detail=f"Unknown agent_role: {agent_role}")
+    redis_client = db_manager.get_redis_client()
+    raw = redis_client.get(_goal_store_key(agent_role))
+    if not raw:
+        return {"status": "success", "agent_role": resolve_agent_role(agent_role), "goal_target": None}
+    try:
+        goal_target = json.loads(raw)
+    except Exception:
+        goal_target = raw
+    return {"status": "success", "agent_role": resolve_agent_role(agent_role), "goal_target": goal_target}
+
+
+@app.post("/agents/{agent_role}/goal-target")
+async def set_agent_goal_target(agent_role: str, request: GoalTargetRequest, user=Depends(get_current_user)):
+    if get_agent_spec(agent_role) is None:
+        raise HTTPException(status_code=400, detail=f"Unknown agent_role: {agent_role}")
+    goal = _normalize_goal_request(request)
+    if not goal["metric"]:
+        raise HTTPException(status_code=400, detail="metric is required")
+    redis_client = db_manager.get_redis_client()
+    redis_client.set(_goal_store_key(agent_role), json.dumps(goal))
+    return {"status": "success", "agent_role": resolve_agent_role(agent_role), "goal_target": goal}
+
+
+@app.delete("/agents/{agent_role}/goal-target")
+async def clear_agent_goal_target(agent_role: str, user=Depends(get_current_user)):
+    if get_agent_spec(agent_role) is None:
+        raise HTTPException(status_code=400, detail=f"Unknown agent_role: {agent_role}")
+    redis_client = db_manager.get_redis_client()
+    redis_client.delete(_goal_store_key(agent_role))
+    return {"status": "success", "agent_role": resolve_agent_role(agent_role), "message": "Goal target cleared."}
 
 
 @app.get("/task/{task_id}/events")

@@ -5,6 +5,7 @@ import sys
 import os
 import time
 from datetime import datetime
+from typing import Any, Callable
 
 # Append project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -222,11 +223,199 @@ class BaseAgent:
     def handle_task(self, task_data):
         """Default task handler. Can be overridden by subclasses."""
         task_type = task_data.get("task", {}).get("type")
+
+        if task_type == "set_goal_target":
+            return self._set_goal_target(task_data)
+        if task_type == "get_goal_target":
+            return self._get_goal_target()
+        if task_type == "clear_goal_target":
+            return self._clear_goal_target()
         
         if task_type == "manual_command":
             return self._handle_manual_command(task_data)
             
         raise NotImplementedError(f"Agent {self.AGENT_ROLE} does not implement task type: {task_type}")
+
+    def _goal_store_key(self) -> str:
+        return f"agent_goal_target:{self.AGENT_ROLE}"
+
+    def _normalize_goal_target(self, raw_goal: dict[str, Any] | None) -> dict[str, Any]:
+        goal = dict(raw_goal or {})
+        metric = str(goal.get("metric", "")).strip()
+        comparator = str(goal.get("comparator", "gte")).strip().lower()
+        target_value = goal.get("target_value")
+        max_attempts = goal.get("max_attempts", 3)
+        retry_delay_seconds = goal.get("retry_delay_seconds", 0)
+        enabled = bool(goal.get("enabled", True))
+        return {
+            "enabled": enabled,
+            "metric": metric,
+            "comparator": comparator,
+            "target_value": target_value,
+            "max_attempts": max(1, int(max_attempts)),
+            "retry_delay_seconds": max(0.0, float(retry_delay_seconds)),
+        }
+
+    def _set_goal_target(self, task_data):
+        task = task_data.get("task", {})
+        raw_goal = task.get("goal_target", task)
+        goal = self._normalize_goal_target(raw_goal)
+        if not goal.get("metric"):
+            return {"status": "error", "message": "goal_target.metric is required"}
+        if goal.get("target_value") is None:
+            return {"status": "error", "message": "goal_target.target_value is required"}
+        try:
+            self.redis_client.set(self._goal_store_key(), json.dumps(goal))
+            self.log_execution(
+                task=task_data,
+                thought_process="Persisted per-agent goal configuration for autonomous retries.",
+                action_taken=f"Stored goal target for {self.AGENT_ROLE}: {goal}",
+                status="success",
+            )
+            return {"status": "success", "message": "Goal target stored.", "goal_target": goal}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to store goal target: {e}"}
+
+    def _get_goal_target(self):
+        try:
+            raw = self.redis_client.get(self._goal_store_key())
+            if not raw:
+                return {"status": "success", "goal_target": None}
+            return {"status": "success", "goal_target": json.loads(raw)}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to read goal target: {e}"}
+
+    def _clear_goal_target(self):
+        try:
+            self.redis_client.delete(self._goal_store_key())
+            return {"status": "success", "message": "Goal target cleared."}
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to clear goal target: {e}"}
+
+    def _resolve_goal_target(self, task_data) -> dict[str, Any] | None:
+        task = task_data.get("task", {})
+        direct_goal = task.get("goal_target")
+        if isinstance(direct_goal, dict):
+            goal = self._normalize_goal_target(direct_goal)
+            if goal.get("metric") and goal.get("target_value") is not None and goal.get("enabled", True):
+                return goal
+            return None
+
+        try:
+            raw = self.redis_client.get(self._goal_store_key())
+            if not raw:
+                return None
+            goal = self._normalize_goal_target(json.loads(raw))
+            if goal.get("metric") and goal.get("target_value") is not None and goal.get("enabled", True):
+                return goal
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _extract_metric_value(payload: Any, metric: str):
+        if not metric:
+            return None
+        current = payload
+        for part in metric.split("."):
+            if isinstance(current, dict) and part in current:
+                current = current.get(part)
+            else:
+                return None
+        return current
+
+    @staticmethod
+    def _evaluate_goal_value(metric_value: Any, comparator: str, target_value: Any) -> bool:
+        if comparator in {"gte", "gt", "lte", "lt"}:
+            try:
+                mv = float(metric_value)
+                tv = float(target_value)
+                if comparator == "gte":
+                    return mv >= tv
+                if comparator == "gt":
+                    return mv > tv
+                if comparator == "lte":
+                    return mv <= tv
+                return mv < tv
+            except Exception:
+                return False
+        if comparator == "contains":
+            try:
+                return str(target_value) in str(metric_value)
+            except Exception:
+                return False
+        if comparator == "neq":
+            return metric_value != target_value
+        # Default strict equality.
+        return metric_value == target_value
+
+    def _goal_check(self, result: Any, goal_target: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        metric = goal_target.get("metric", "")
+        metric_value = self._extract_metric_value(result, metric)
+        comparator = goal_target.get("comparator", "gte")
+        target_value = goal_target.get("target_value")
+        achieved = self._evaluate_goal_value(metric_value, comparator, target_value)
+        detail = {
+            "metric": metric,
+            "metric_value": metric_value,
+            "comparator": comparator,
+            "target_value": target_value,
+            "achieved": achieved,
+        }
+        return achieved, detail
+
+    def _execute_with_goal_target(
+        self,
+        task_data: dict[str, Any],
+        executor: Callable[[dict[str, Any]], Any],
+        operation_name: str,
+    ) -> dict[str, Any]:
+        goal_target = self._resolve_goal_target(task_data)
+        if not goal_target:
+            result = executor(task_data)
+            return result if isinstance(result, dict) else {"status": "success", "result": result}
+
+        max_attempts = int(goal_target.get("max_attempts", 3))
+        delay_s = float(goal_target.get("retry_delay_seconds", 0))
+        attempts: list[dict[str, Any]] = []
+        last_result: dict[str, Any] = {"status": "error", "message": "No execution attempt made"}
+
+        for attempt in range(1, max_attempts + 1):
+            self._publish_task_event(
+                task_context=task_data,
+                event_type="progress",
+                message=f"{operation_name}: goal-run attempt {attempt}/{max_attempts}",
+                status="info",
+                payload={"goal_target": goal_target, "attempt": attempt},
+            )
+            raw_result = executor(task_data)
+            result = raw_result if isinstance(raw_result, dict) else {"status": "success", "result": raw_result}
+            achieved, check = self._goal_check(result, goal_target)
+            attempts.append({"attempt": attempt, "goal_check": check, "status": result.get("status", "unknown")})
+            last_result = dict(result)
+            if achieved:
+                last_result["goal_tracking"] = {
+                    "enabled": True,
+                    "operation": operation_name,
+                    "goal_achieved": True,
+                    "attempt_count": attempt,
+                    "attempts": attempts,
+                }
+                return last_result
+            if delay_s > 0 and attempt < max_attempts:
+                time.sleep(delay_s)
+
+        out = dict(last_result)
+        out["status"] = "warning" if out.get("status") == "success" else out.get("status", "warning")
+        out["message"] = out.get("message", f"{operation_name} finished without reaching goal target")
+        out["goal_tracking"] = {
+            "enabled": True,
+            "operation": operation_name,
+            "goal_achieved": False,
+            "attempt_count": max_attempts,
+            "attempts": attempts,
+        }
+        return out
 
     def _handle_manual_command(self, task_data):
         """Processes a free-text command from the user using the LLM."""

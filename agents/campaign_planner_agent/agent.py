@@ -23,7 +23,7 @@ class CampaignPlannerAgent(BaseAgent):
         task_type = task_data.get("task", {}).get("type")
 
         if task_type == "plan_campaign":
-            return self._plan_campaign(task_data)
+            return self._execute_with_goal_target(task_data, self._plan_campaign, "plan_campaign")
         else:
             return super().handle_task(task_data)
 
@@ -55,6 +55,11 @@ class CampaignPlannerAgent(BaseAgent):
         return {
             "status": "success",
             "message": "Campaign plan dispatched.",
+            "campaign_name": campaign_name,
+            "google_budget": google_budget,
+            "fb_budget": fb_budget,
+            "total_budget": round(google_budget + fb_budget, 2),
+            "dispatched_count": 2,
             "dispatched": {
                 "google_task_id": google_task_id,
                 "fb_task_id": fb_task_id,

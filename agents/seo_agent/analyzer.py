@@ -13,6 +13,7 @@ from openai import OpenAI
 
 from agents.seo_agent.seo_config import cfg
 from agents.seo_agent.vector_store import vector_store
+from core.llm_gateway.gateway import llm_gateway
 
 logger = logging.getLogger("ci.analyzer")
 
@@ -352,9 +353,55 @@ class Analyzer:
 
         # All providers failed
         logger.error("All configured LLM providers failed")
-        if last_exc:
-            raise last_exc
-        raise RuntimeError("No LLM provider available")
+        # Global fallback: use CLI-based LLM tools configured in llm_gateway (codex/claude/copilot/gemini).
+        try:
+            cli_response = llm_gateway.execute(
+                prompt=prompt,
+                provider="anthropic",
+                system_prompt=SYSTEM_PROMPT,
+                retries=1,
+                temperature=0.2,
+            )
+            if cli_response:
+                self._last_llm_provider_used = "cli_fallback"
+                try:
+                    vector_store.record_llm_event(
+                        provider="cli_fallback",
+                        event="success",
+                        message=(str(cli_response)[:1000]),
+                        details={"use_case": use_case},
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to record llm metric (cli fallback success): {e}")
+                return cli_response
+        except Exception as e:
+            logger.warning(f"CLI fallback via llm_gateway failed: {e}")
+        # Final safety net: return structured fallback JSON so autonomous pipeline
+        # can complete with explicit warning instead of hard-failing.
+        fallback_payload = {
+            "executive_summary": (
+                "Automated analysis degraded: all LLM providers and CLI fallbacks were unavailable "
+                "for this run. Data collection completed; action generation is deferred."
+            ),
+            "key_findings": [],
+            "action_plan": [],
+            "quick_wins": [],
+            "monitoring_alerts": [
+                "LLM unavailable during analysis run; retry after provider/CLI recovery."
+            ],
+            "ga4_insights": {},
+            "degraded_mode": True,
+        }
+        try:
+            vector_store.record_llm_event(
+                provider="analyzer",
+                event="degraded_fallback",
+                message=(str(last_exc)[:1000] if last_exc else "No LLM provider available"),
+                details={"use_case": use_case},
+            )
+        except Exception:
+            pass
+        return json.dumps(fallback_payload)
 
     def format_keyword_table(self, keywords: list[dict], key_field: str = "keyword") -> str:
         if not keywords:

@@ -33,6 +33,7 @@ class GA4ConversionAuditor:
     def __init__(self):
         self._ga_client = None  # initialized lazily
         self._db_config = self._get_db_config()
+        self._attribution_table_name = "CI_ci_order_attribution"
 
     def _get_db_config(self) -> dict:
         """
@@ -68,6 +69,34 @@ class GA4ConversionAuditor:
     def _get_db_connection(self):
         """Get MySQL connection using WP credentials."""
         return mysql.connector.connect(**self._db_config)
+
+    def _attribution_table_exists(self, conn) -> bool:
+        """Fast preflight check to avoid noisy SQL errors when attribution table is absent."""
+        db_name = (self._db_config or {}).get("database")
+        if not db_name:
+            return False
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = %s AND table_name = %s
+                LIMIT 1
+                """,
+                (db_name, self._attribution_table_name),
+            )
+            return bool(cursor.fetchone())
+        finally:
+            cursor.close()
+
+    def _attribution_unavailable(self, days: int, reason: str) -> dict:
+        return {
+            "status": "unavailable",
+            "period_days": days,
+            "error": reason,
+            "note": "Attribution table not available yet — deploy/verify the attribution capture plugin and table sync.",
+        }
 
     def _get_ga_client(self):
         """Lazy-init GA4 client using the same pattern as ga_client.py."""
@@ -213,6 +242,12 @@ class GA4ConversionAuditor:
         """
         try:
             conn = self._get_db_connection()
+            if not self._attribution_table_exists(conn):
+                conn.close()
+                return self._attribution_unavailable(
+                    days,
+                    f"Table '{self._db_config.get('database', '')}.{self._attribution_table_name}' does not exist",
+                )
             cursor = conn.cursor(dictionary=True)
 
             since = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -295,14 +330,8 @@ class GA4ConversionAuditor:
             }
 
         except Exception as e:
-            logger.warning(
-                f"Attribution summary unavailable (tables may not exist yet): {e}"
-            )
-            return {
-                "status": "unavailable",
-                "error": str(e),
-                "note": "Attribution tables not yet created — deploy TASK-4 MU plugin first",
-            }
+            logger.warning(f"Attribution summary unavailable: {e}")
+            return self._attribution_unavailable(days, str(e))
 
     def get_searchterm_conversion_map(
         self, gsc_keywords: list[dict], days: int = 28
@@ -314,6 +343,9 @@ class GA4ConversionAuditor:
         """
         try:
             conn = self._get_db_connection()
+            if not self._attribution_table_exists(conn):
+                conn.close()
+                return gsc_keywords
             cursor = conn.cursor(dictionary=True)
 
             since = (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")

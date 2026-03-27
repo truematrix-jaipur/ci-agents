@@ -9,6 +9,7 @@ from google.oauth2 import service_account
 from google.analytics.data_v1beta import BetaAnalyticsDataClient
 from google.analytics.data_v1beta.types import DateRange, Dimension, Metric, RunReportRequest, OrderBy
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,93 @@ class GoogleMultisiteCollector:
         creds = self._ensure_creds(CLOUD_SCOPES)
         self._serviceusage = build("serviceusage", "v1", credentials=creds)
         return self._serviceusage
+
+    @staticmethod
+    def _normalize_site_url(value: str) -> str:
+        v = (value or "").strip().lower()
+        if not v:
+            return ""
+        if v.startswith("sc-domain:"):
+            return v
+        if v.endswith("/"):
+            v = v[:-1]
+        return v
+
+    @classmethod
+    def _site_url_accessible(cls, requested: str, entries: list[dict]) -> bool:
+        req = cls._normalize_site_url(requested)
+        if not req:
+            return False
+        discovered = {cls._normalize_site_url((e or {}).get("siteUrl", "")) for e in (entries or [])}
+        if req in discovered:
+            return True
+        # Graceful normalization between URL and sc-domain forms.
+        if req.startswith("https://"):
+            host = req.replace("https://", "", 1)
+            return f"sc-domain:{host}" in discovered
+        if req.startswith("http://"):
+            host = req.replace("http://", "", 1)
+            return f"sc-domain:{host}" in discovered
+        if req.startswith("sc-domain:"):
+            host = req.replace("sc-domain:", "", 1)
+            return (f"https://{host}" in discovered) or (f"http://{host}" in discovered)
+        return False
+
+    @staticmethod
+    def _extract_http_status(exc: Exception) -> int | None:
+        if isinstance(exc, HttpError):
+            resp = getattr(exc, "resp", None)
+            status = getattr(resp, "status", None)
+            if isinstance(status, int):
+                return status
+        return None
+
+    @classmethod
+    def _classify_scope_error(cls, scope: str, exc: Exception, profile: dict[str, Any]) -> dict[str, Any]:
+        status = cls._extract_http_status(exc)
+        raw = str(exc)
+        lower = raw.lower()
+        forbidden = status == 403 or "forbidden" in lower or "permission" in lower or "access denied" in lower
+        unauth = status == 401 or "unauthorized" in lower or "invalid credentials" in lower
+        scope_help = {
+            "gsc": [
+                "Grant service-account access in Search Console (Settings > Users and permissions).",
+                "Use the exact verified property URL/sc-domain from accessible sites list.",
+            ],
+            "ga4": [
+                "Grant the service account Viewer/Analyst access to the GA4 property.",
+                "Verify GA4 property ID is correct and active.",
+            ],
+            "core_web_vitals": [
+                "Ensure PageSpeed Insights API is enabled for the configured GCP project.",
+                "Check API key restrictions and billing/project quota.",
+            ],
+            "woocommerce_products": [
+                "Verify WooCommerce REST keys and site URL for this profile.",
+                "Confirm source site allows API access from this host.",
+            ],
+        }
+        code = "unknown_error"
+        if forbidden:
+            code = "forbidden"
+        elif unauth:
+            code = "unauthorized"
+
+        out = {
+            "scope": scope,
+            "error": raw,
+            "error_code": code,
+            "status_code": status,
+        }
+        if forbidden or unauth:
+            out["remediation"] = scope_help.get(scope, ["Validate credentials, permissions, and endpoint configuration."])
+            out["profile_context"] = {
+                "site_id": profile.get("site_id"),
+                "domain": profile.get("domain"),
+                "gsc_site_url": profile.get("gsc_site_url"),
+                "ga4_property_id": profile.get("ga4_property_id"),
+            }
+        return out
 
     @staticmethod
     def parse_site_profiles(raw: str) -> List[Dict[str, Any]]:
@@ -284,7 +372,7 @@ class GoogleMultisiteCollector:
         try:
             result["accessible_gsc_sites"] = self.list_accessible_gsc_sites()
         except Exception as e:
-            result["errors"].append({"scope": "gsc_list_sites", "error": str(e)})
+            result["errors"].append(self._classify_scope_error("gsc", e, {}))
 
         for profile in site_profiles:
             site_id = profile.get("site_id") or profile.get("domain") or "unknown"
@@ -298,20 +386,42 @@ class GoogleMultisiteCollector:
                 if ga4_property_id:
                     site_out["ga4"] = self.fetch_ga4_bundle(ga4_property_id, days=days)
             except Exception as e:
-                site_out.setdefault("errors", []).append({"scope": "ga4", "error": str(e)})
+                site_out.setdefault("errors", []).append(self._classify_scope_error("ga4", e, profile))
 
             try:
                 if gsc_site_url:
-                    site_out["gsc"] = self.fetch_gsc_bundle(gsc_site_url, days=days)
+                    if result.get("accessible_gsc_sites") and not self._site_url_accessible(
+                        gsc_site_url, result.get("accessible_gsc_sites", [])
+                    ):
+                        site_out.setdefault("errors", []).append(
+                            {
+                                "scope": "gsc",
+                                "error_code": "site_not_accessible",
+                                "error": f"GSC site '{gsc_site_url}' is not in accessible Search Console properties.",
+                                "remediation": [
+                                    "Add service-account user to the target GSC property.",
+                                    "Update gsc_site_url to a verified accessible property (https:// or sc-domain).",
+                                ],
+                                "profile_context": {
+                                    "site_id": profile.get("site_id"),
+                                    "domain": profile.get("domain"),
+                                    "gsc_site_url": profile.get("gsc_site_url"),
+                                },
+                            }
+                        )
+                    else:
+                        site_out["gsc"] = self.fetch_gsc_bundle(gsc_site_url, days=days)
             except Exception as e:
-                site_out.setdefault("errors", []).append({"scope": "gsc", "error": str(e)})
+                site_out.setdefault("errors", []).append(self._classify_scope_error("gsc", e, profile))
 
             try:
                 cwv_url = canonical_url or profile.get("base_url") or ""
                 if cwv_url:
                     site_out["core_web_vitals"] = self.fetch_cwv_snapshot(cwv_url, strategy="mobile")
             except Exception as e:
-                site_out.setdefault("errors", []).append({"scope": "core_web_vitals", "error": str(e)})
+                site_out.setdefault("errors", []).append(
+                    self._classify_scope_error("core_web_vitals", e, profile)
+                )
 
             try:
                 site_out["woocommerce_products"] = self.fetch_woocommerce_products(
@@ -321,7 +431,9 @@ class GoogleMultisiteCollector:
                     per_page=int(profile.get("wc_per_page", 100)),
                 )
             except Exception as e:
-                site_out.setdefault("errors", []).append({"scope": "woocommerce_products", "error": str(e)})
+                site_out.setdefault("errors", []).append(
+                    self._classify_scope_error("woocommerce_products", e, profile)
+                )
 
             if site_out.get("errors"):
                 site_out["status"] = "partial"

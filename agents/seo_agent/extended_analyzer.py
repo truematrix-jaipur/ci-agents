@@ -10,6 +10,7 @@ from typing import Optional
 
 from agents.seo_agent.seo_config import cfg
 from agents.seo_agent.vector_store import vector_store
+from core.llm_gateway.gateway import llm_gateway
 
 logger = logging.getLogger("ci.extended_analyzer")
 
@@ -87,7 +88,7 @@ class ExtendedAnalyzer:
         self._llm_client = None
 
     def _call_llm(self, prompt: str) -> str:
-        """Call GPT-4o or Claude for analysis."""
+        """Call primary LLM, then shared gateway fallback (incl. CLI) on failure."""
         try:
             from openai import OpenAI
             oai = OpenAI(api_key=cfg.OPENAI_API_KEY)
@@ -99,8 +100,21 @@ class ExtendedAnalyzer:
             )
             return resp.choices[0].message.content
         except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            raise
+            logger.warning(f"Primary extended-analysis LLM call failed: {e}")
+            try:
+                return llm_gateway.execute(
+                    prompt=prompt,
+                    provider="openai",
+                    system_prompt=(
+                        "You are a technical SEO analyzer. Return valid JSON only "
+                        "matching the requested schema."
+                    ),
+                    retries=1,
+                    temperature=0.2,
+                )
+            except Exception as fallback_error:
+                logger.error(f"Extended-analysis fallback LLM call failed: {fallback_error}")
+                raise
 
     def _fmt(self, data, max_items: int = 10) -> str:
         """Format a dict/list for prompt inclusion."""
@@ -151,7 +165,24 @@ class ExtendedAnalyzer:
             psi_scores=self._fmt(psi),
         )
 
-        raw = self._call_llm(prompt)
+        try:
+            raw = self._call_llm(prompt)
+        except Exception as e:
+            logger.warning(f"Extended analysis degraded mode enabled: {e}")
+            raw = json.dumps(
+                {
+                    "technical_summary": (
+                        "Extended technical analysis degraded: LLM providers were unavailable for this run."
+                    ),
+                    "critical_issues": [],
+                    "schema_issues": [],
+                    "indexing_actions": [],
+                    "cwv_recommendations": [],
+                    "sitemap_actions": [],
+                    "link_building_opportunities": [],
+                    "degraded_mode": True,
+                }
+            )
         try:
             analysis = json.loads(raw)
         except Exception:

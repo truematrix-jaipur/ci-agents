@@ -26,6 +26,18 @@ class GoogleAgent(BaseAgent):
     
     You never assume state. You always verify configurations via official APIs."""
 
+    @staticmethod
+    def _safe_int(value, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+        try:
+            parsed = int(value)
+        except Exception:
+            parsed = default
+        if min_value is not None and parsed < min_value:
+            parsed = min_value
+        if max_value is not None and parsed > max_value:
+            parsed = max_value
+        return parsed
+
     def __init__(self, agent_id=None):
         super().__init__(agent_id)
         self.credentials_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "/home/agents/config/google_truematrix_sa.json")
@@ -57,7 +69,8 @@ class GoogleAgent(BaseAgent):
 
     def handle_task(self, task_data):
         logger.info(f"Google Agent {self.agent_id} handling task: {task_data}")
-        task_type = task_data.get("task", {}).get("type")
+        payload = self._extract_task_payload(task_data)
+        task_type = payload.get("type")
 
         if task_type == "get_gsc_performance":
             return self._execute_with_goal_target(task_data, self._fetch_gsc_data, "get_gsc_performance")
@@ -87,8 +100,9 @@ class GoogleAgent(BaseAgent):
         )
 
     def _enable_required_google_services(self, task_data):
-        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
-        requested = task_data.get("task", {}).get("services") or DEFAULT_REQUIRED_APIS
+        payload = self._extract_task_payload(task_data)
+        project_id = payload.get("project_id", self.default_project_id)
+        requested = payload.get("services") or DEFAULT_REQUIRED_APIS
         try:
             collector = self._collector()
             result = collector.enable_required_apis(project_id=project_id, required_apis=requested)
@@ -102,9 +116,10 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _fetch_multisite_marketing_data(self, task_data):
-        days = int(task_data.get("task", {}).get("days", 28))
-        profiles = task_data.get("task", {}).get("site_profiles") or self.site_profiles
-        output_file = task_data.get("task", {}).get("output_file", "")
+        payload = self._extract_task_payload(task_data)
+        days = self._safe_int(payload.get("days", 28), default=28, min_value=1, max_value=365)
+        profiles = payload.get("site_profiles") or self.site_profiles
+        output_file = payload.get("output_file", "")
 
         try:
             collector = self._collector()
@@ -135,8 +150,9 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _enable_api(self, task_data):
-        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
-        service_name = task_data.get("task", {}).get("service", "generativelanguage.googleapis.com")
+        payload = self._extract_task_payload(task_data)
+        project_id = payload.get("project_id", self.default_project_id)
+        service_name = payload.get("service", "generativelanguage.googleapis.com")
         if not project_id:
             return {"status": "error", "message": "project_id is required (or set GOOGLE_PROJECT_ID)"}
         
@@ -160,8 +176,9 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _generate_api_key(self, task_data):
-        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
-        display_name = task_data.get("task", {}).get("display_name", "TrueMatrix Swarm Key")
+        payload = self._extract_task_payload(task_data)
+        project_id = payload.get("project_id", self.default_project_id)
+        display_name = payload.get("display_name", "TrueMatrix Swarm Key")
         if not project_id:
             return {"status": "error", "message": "project_id is required (or set GOOGLE_PROJECT_ID)"}
         
@@ -195,7 +212,8 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _list_api_keys(self, task_data):
-        project_id = task_data.get("task", {}).get("project_id", self.default_project_id)
+        payload = self._extract_task_payload(task_data)
+        project_id = payload.get("project_id", self.default_project_id)
         if not project_id:
             return {"status": "error", "message": "project_id is required (or set GOOGLE_PROJECT_ID)"}
         
@@ -252,7 +270,8 @@ class GoogleAgent(BaseAgent):
     def _fetch_ga4_data(self, task_data):
         try:
             from agents.seo_agent.ga_client import ga_client
-            days = int(task_data.get("task", {}).get("days", 28))
+            payload = self._extract_task_payload(task_data)
+            days = self._safe_int(payload.get("days", 28), default=28, min_value=1, max_value=365)
             snapshot = ga_client.fetch_full_snapshot(days=days)
             summary = ga_client.compute_summary_stats(snapshot)
             return {
@@ -267,8 +286,9 @@ class GoogleAgent(BaseAgent):
             return {"status": "error", "message": str(e)}
 
     def _set_new_budget(self, task_data):
-        budget = task_data.get("task", {}).get("budget")
-        channel = task_data.get("task", {}).get("channel", "google_ads")
+        payload = self._extract_task_payload(task_data)
+        budget = payload.get("budget")
+        channel = payload.get("channel", "google_ads")
         if budget is None:
             return {"status": "error", "message": "budget is required"}
         self.log_execution(

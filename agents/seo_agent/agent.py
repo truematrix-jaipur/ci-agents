@@ -1,6 +1,9 @@
 import sys
 import os
 import logging
+import datetime
+import time
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.base_agent import BaseAgent
@@ -17,11 +20,15 @@ class SEOAgent(BaseAgent):
     You manage the SEO health of connected websites. 
     You do not hallucinate data. You must spawn subagents (like speed optimizer) 
     or request data from the Data Analyser agent to gather factual insights."""
+    METRICS_REDIS_KEY = "agent_runtime_metrics:seo_agent"
+    METRICS_EVENTS_REDIS_KEY = "agent_runtime_metrics_events:seo_agent"
+    GOAL_REDIS_KEY = "agent_goal_profile:seo_agent"
 
     def __init__(self, agent_id=None):
         super().__init__(agent_id)
         self.ci_bridge = CISEOBridge()
         self._scheduler = None
+        self._metrics = {"tasks_total": 0, "success": 0, "warning": 0, "error": 0}
         if config.SEO_AUTONOMOUS_SCHEDULER_ENABLED:
             self._start_scheduler()
 
@@ -36,90 +43,309 @@ class SEOAgent(BaseAgent):
 
     def handle_task(self, task_data):
         logger.info(f"SEO Agent {self.agent_id} handling task: {task_data}")
-        task_type = task_data.get("task", {}).get("type")
-        target_url = task_data.get("task", {}).get("url")
+        payload = self._extract_task_payload(task_data)
+        task_type = payload.get("type")
+        started_at = time.perf_counter()
+        route = task_type or "unknown"
 
         if task_type == "full_audit":
-            return self._execute_with_goal_target(task_data, self._full_audit, "full_audit")
+            result = self._full_audit(task_data)
         elif task_type == "run_autonomous_pipeline":
-            return self._execute_with_goal_target(task_data, self._run_pipeline, "run_autonomous_pipeline")
+            result = self._run_pipeline(task_data)
         elif task_type == "get_latest_report":
-            return self._get_latest_report(task_data)
+            result = self._get_latest_report(task_data)
         elif task_type == "list_pending_actions":
-            return self._list_pending_actions(task_data)
+            result = self._list_pending_actions(task_data)
         elif task_type == "approve_report":
-            return self._approve_report(task_data)
+            result = self._approve_report(task_data)
         elif task_type == "run_implementation":
-            return self._execute_with_goal_target(task_data, self._run_implementation, "run_implementation")
+            result = self._run_implementation(task_data)
         elif task_type == "run_validation":
-            return self._execute_with_goal_target(task_data, self._run_validation, "run_validation")
+            result = self._run_validation(task_data)
         elif task_type == "status":
-            return self._status(task_data)
+            result = self._status(task_data)
         elif task_type == "report_history":
-            return self._report_history(task_data)
+            result = self._report_history(task_data)
         elif task_type == "list_actions":
-            return self._list_actions(task_data)
+            result = self._list_actions(task_data)
         elif task_type == "metrics":
-            return self._metrics(task_data)
+            result = self._metrics(task_data)
         elif task_type == "get_logs":
-            return self._logs(task_data)
+            result = self._logs(task_data)
         elif task_type == "run_fetch_only":
-            return self._run_fetch_only(task_data)
+            result = self._run_fetch_only(task_data)
         elif task_type == "run_extended":
-            return self._run_extended(task_data)
+            result = self._run_extended(task_data)
         elif task_type == "get_extended_report":
-            return self._get_extended_report(task_data)
+            result = self._get_extended_report(task_data)
         elif task_type == "search_seo_data":
-            return self._search_seo_data(task_data)
+            result = self._search_seo_data(task_data)
         elif task_type == "get_ga4_summary":
-            return self._get_ga4_summary(task_data)
+            result = self._get_ga4_summary(task_data)
         elif task_type == "get_ga4_page_metrics":
-            return self._get_ga4_page_metrics(task_data)
+            result = self._get_ga4_page_metrics(task_data)
         elif task_type == "ga4_fetch":
-            return self._ga4_fetch(task_data)
+            result = self._ga4_fetch(task_data)
         elif task_type == "ga4_snapshots":
-            return self._ga4_snapshots(task_data)
+            result = self._ga4_snapshots(task_data)
         elif task_type == "ga4_conversion_audit":
-            return self._ga4_conversion_audit(task_data)
+            result = self._ga4_conversion_audit(task_data)
         elif task_type == "ga4_attribution_data":
-            return self._ga4_attribution_data(task_data)
+            result = self._ga4_attribution_data(task_data)
         elif task_type == "ga4_funnel_report":
-            return self._ga4_funnel_report(task_data)
+            result = self._ga4_funnel_report(task_data)
         elif task_type == "search_reference_docs":
-            return self._search_reference_docs(task_data)
+            result = self._search_reference_docs(task_data)
         elif task_type == "reference_doc_sources":
-            return self._reference_doc_sources(task_data)
+            result = self._reference_doc_sources(task_data)
         elif task_type == "train_reference_docs":
-            return self._train_reference_docs(task_data)
+            result = self._train_reference_docs(task_data)
+        elif task_type == "set_goal_target":
+            result = self._set_goal_target(task_data)
+            route = "set_goal_target"
+        elif task_type == "get_goal_target":
+            result = self._get_goal_target(task_data)
+            route = "get_goal_target"
+        elif task_type == "manual_command":
+            result = self._handle_manual_command(task_data)
+            route = "manual_command"
         else:
-            return super().handle_task(task_data)
+            result = super().handle_task(task_data)
+            route = "fallback"
+        return self._finalize_result(result=result, started_at=started_at, route=route)
+
+    @staticmethod
+    def _safe_int(value, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+        try:
+            parsed = int(value)
+        except Exception:
+            parsed = default
+        if min_value is not None and parsed < min_value:
+            parsed = min_value
+        if max_value is not None and parsed > max_value:
+            parsed = max_value
+        return parsed
+
+    def _finalize_result(self, result, started_at: float, route: str):
+        out = result if isinstance(result, dict) else {"status": "success", "result": result}
+        status = str(out.get("status", "success")).lower()
+        if status not in {"success", "warning", "error"}:
+            status = "success"
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+
+        if not hasattr(self, "_metrics") or not isinstance(self._metrics, dict):
+            self._metrics = {"tasks_total": 0, "success": 0, "warning": 0, "error": 0}
+        self._metrics["tasks_total"] += 1
+        self._metrics[status] += 1
+        out.setdefault("execution", {})
+        out["execution"].update(
+            {
+                "route": route,
+                "duration_ms": elapsed_ms,
+                "metrics_snapshot": dict(self._metrics),
+            }
+        )
+        self._persist_metrics(route=route, status=status, duration_ms=elapsed_ms)
+        return out
+
+    def _persist_metrics(self, route: str, status: str, duration_ms: int):
+        redis_client = getattr(self, "redis_client", None)
+        if redis_client is None:
+            return
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+        try:
+            mapping = {
+                "tasks_total": str(self._metrics.get("tasks_total", 0)),
+                "success": str(self._metrics.get("success", 0)),
+                "warning": str(self._metrics.get("warning", 0)),
+                "error": str(self._metrics.get("error", 0)),
+                "last_route": route,
+                "last_status": status,
+                "last_duration_ms": str(int(duration_ms)),
+                "updated_at_utc": now,
+            }
+            redis_client.hset(self.METRICS_REDIS_KEY, mapping=mapping)
+            redis_client.expire(self.METRICS_REDIS_KEY, 3600 * 24 * 30)
+            event = {
+                "timestamp_utc": now,
+                "route": route,
+                "status": status,
+                "duration_ms": int(duration_ms),
+                "tasks_total": int(self._metrics.get("tasks_total", 0)),
+            }
+            redis_client.rpush(self.METRICS_EVENTS_REDIS_KEY, json.dumps(event))
+            redis_client.ltrim(self.METRICS_EVENTS_REDIS_KEY, -5000, -1)
+            redis_client.expire(self.METRICS_EVENTS_REDIS_KEY, 3600 * 24 * 30)
+        except Exception:
+            return
+
+    def _handle_manual_command(self, task_data):
+        payload = self._extract_task_payload(task_data)
+        command = str(payload.get("command", "")).strip()
+        if not command:
+            return {"status": "error", "message": "command is required for manual_command"}
+        cmd = command.lower()
+        if "goal" in cmd and ("show" in cmd or "get" in cmd or "view" in cmd):
+            result = self._get_goal_target(task_data)
+            result["manual_command_routed"] = "get_goal_target"
+            return result
+        if "status" in cmd:
+            result = self._status(task_data)
+            result["manual_command_routed"] = "status"
+            return result
+        if ("pipeline" in cmd or "autonomous" in cmd) and ("run" in cmd or "trigger" in cmd):
+            result = self._run_pipeline(task_data)
+            result["manual_command_routed"] = "run_autonomous_pipeline"
+            return result
+        if "pending" in cmd and "action" in cmd:
+            result = self._list_pending_actions(task_data)
+            result["manual_command_routed"] = "list_pending_actions"
+            return result
+        if "latest" in cmd and "report" in cmd:
+            result = self._get_latest_report(task_data)
+            result["manual_command_routed"] = "get_latest_report"
+            return result
+        return {
+            "status": "success",
+            "message": (
+                "Manual command not executed to avoid non-deterministic LLM fallback. "
+                "Use structured task types like: status, run_autonomous_pipeline, get_latest_report, "
+                "list_pending_actions, report_history, ga4_fetch."
+            ),
+            "skipped_llm": True,
+            "manual_command": command,
+        }
+
+    def _set_goal_target(self, task_data):
+        payload = self._extract_task_payload(task_data)
+        goal_input = payload.get("goal")
+        if not isinstance(goal_input, dict):
+            goal_input = {
+                "site": payload.get("site") or payload.get("url") or "https://indogenmed.org",
+                "objectives": payload.get("objectives") or [],
+                "scope": payload.get("scope") or [],
+                "priority": payload.get("priority") or "high",
+                "notes": payload.get("notes") or payload.get("goal_notes") or "",
+            }
+
+        objectives = goal_input.get("objectives") or []
+        if isinstance(objectives, str):
+            objectives = [x.strip() for x in objectives.split(",") if x.strip()]
+        if not isinstance(objectives, list):
+            objectives = []
+
+        scope = goal_input.get("scope") or []
+        if isinstance(scope, str):
+            scope = [x.strip() for x in scope.split(",") if x.strip()]
+        if not isinstance(scope, list):
+            scope = []
+
+        normalized = {
+            "site": goal_input.get("site") or "https://indogenmed.org",
+            "objectives": objectives,
+            "scope": scope,
+            "priority": goal_input.get("priority") or "high",
+            "notes": goal_input.get("notes") or "",
+            "updated_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),
+            "source": payload.get("source") or "manual_set_goal_target",
+        }
+
+        self._goal_profile = normalized
+        redis_client = getattr(self, "redis_client", None)
+        if redis_client is not None:
+            try:
+                redis_client.hset(
+                    self.GOAL_REDIS_KEY,
+                    mapping={
+                        "goal_profile_json": json.dumps(normalized),
+                        "updated_at_utc": normalized["updated_at_utc"],
+                        "site": str(normalized["site"]),
+                    },
+                )
+                redis_client.expire(self.GOAL_REDIS_KEY, 3600 * 24 * 30)
+            except Exception:
+                pass
+
+        return {
+            "status": "success",
+            "message": "SEO goal target updated.",
+            "goal_profile": normalized,
+        }
+
+    def _get_goal_target(self, task_data):
+        redis_client = getattr(self, "redis_client", None)
+        if redis_client is not None:
+            try:
+                raw = redis_client.hgetall(self.GOAL_REDIS_KEY) or {}
+                goal_json = raw.get("goal_profile_json")
+                if isinstance(goal_json, bytes):
+                    goal_json = goal_json.decode("utf-8", errors="replace")
+                if goal_json:
+                    return {"status": "success", "goal_profile": json.loads(goal_json)}
+            except Exception:
+                pass
+        local_goal = getattr(self, "_goal_profile", None)
+        if isinstance(local_goal, dict):
+            return {"status": "success", "goal_profile": local_goal}
+        return {
+            "status": "warning",
+            "message": "No SEO goal target is set yet.",
+            "goal_profile": None,
+        }
 
     def _full_audit(self, task_data):
-        target_url = task_data.get("task", {}).get("url")
+        payload = self._extract_task_payload(task_data)
+        target_url = payload.get("url") or payload.get("target_url") or "https://indogenmed.org"
         speed_report = {}
         try:
             speed_report = self.spawn_subagent(SpeedOptimizerAgent, {"url": target_url}) or {}
         except Exception as e:
             logger.error(f"SpeedOptimizerAgent failed: {e}")
+        dispatched = {}
+        try:
+            sales_days = self._safe_int(payload.get("sales_window_days", 30), default=30, min_value=1, max_value=365)
+            dispatched["sales_summary_task_id"] = self.publish_task_to_agent(
+                "data_analyser",
+                {
+                    "type": "summarize_sales_trend",
+                    "days": sales_days,
+                    "database": "erpnext",
+                    "source": "seo_full_audit",
+                },
+            )
+        except Exception as e:
+            logger.warning(f"DataAnalyser sales summary dispatch failed: {e}")
 
-        data_req_payload = {
-            "type": "query_db",
-            "database": "mysql",
-            "query": "SELECT page_views FROM traffic_stats WHERE url = %s",
-            "params": [target_url],
-        }
-        self.publish_task_to_agent("data_analyser", data_req_payload)
+        # Optional legacy path: only query traffic stats if explicitly enabled in this environment.
+        traffic_stats_enabled = str(os.getenv("SEO_ENABLE_TRAFFIC_STATS_QUERY", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        if traffic_stats_enabled:
+            table = (os.getenv("SEO_TRAFFIC_STATS_TABLE", "traffic_stats") or "traffic_stats").strip()
+            query = f"SELECT page_views FROM {table} WHERE url = %s"
+            try:
+                dispatched["traffic_stats_task_id"] = self.publish_task_to_agent(
+                    "data_analyser",
+                    {
+                        "type": "query_db",
+                        "database": "mysql",
+                        "query": query,
+                        "params": [target_url],
+                        "source": "seo_full_audit",
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Traffic stats dispatch failed: {e}")
 
         self.log_execution(
             task=task_data,
-            thought_process="Spawned SpeedOptimizer. Published to Data Analyser.",
-            action_taken="Generated partial audit report pending traffic data."
+            thought_process="Spawned SpeedOptimizer and dispatched scalable data signals for SEO audit.",
+            action_taken="Generated partial audit report with async data collection."
         )
         return {
             "status": "success",
             "target_url": target_url,
             "speed_metrics": speed_report.get("metrics", {}),
             "speed_recommendations": speed_report.get("recommendations", []),
+            "dispatched": dispatched,
         }
 
     def _status(self, task_data):
@@ -157,7 +383,8 @@ class SEOAgent(BaseAgent):
             return {"status": "error", "message": f"Pending actions fetch failed: {e}"}
 
     def _approve_report(self, task_data):
-        report_id = task_data.get("task", {}).get("report_id")
+        payload = self._extract_task_payload(task_data)
+        report_id = payload.get("report_id")
         if not report_id:
             try:
                 latest = self.ci_bridge.latest_report()
@@ -187,14 +414,16 @@ class SEOAgent(BaseAgent):
             return {"status": "error", "message": f"Validation trigger failed: {e}"}
 
     def _report_history(self, task_data):
-        limit = int(task_data.get("task", {}).get("limit", 30))
+        payload = self._extract_task_payload(task_data)
+        limit = self._safe_int(payload.get("limit", 30), default=30, min_value=1, max_value=500)
         try:
             return {"status": "success", "history": self.ci_bridge.report_history(limit=limit)}
         except Exception as e:
             return {"status": "error", "message": f"Report history failed: {e}"}
 
     def _list_actions(self, task_data):
-        status_filter = task_data.get("task", {}).get("status")
+        payload = self._extract_task_payload(task_data)
+        status_filter = payload.get("status")
         try:
             return {"status": "success", "actions": self.ci_bridge.all_actions(status=status_filter)}
         except Exception as e:
@@ -207,7 +436,8 @@ class SEOAgent(BaseAgent):
             return {"status": "error", "message": f"Metrics fetch failed: {e}"}
 
     def _logs(self, task_data):
-        lines = int(task_data.get("task", {}).get("lines", 100))
+        payload = self._extract_task_payload(task_data)
+        lines = self._safe_int(payload.get("lines", 100), default=100, min_value=1, max_value=2000)
         try:
             return {"status": "success", "logs": self.ci_bridge.logs(lines=lines)}
         except Exception as e:
@@ -232,10 +462,10 @@ class SEOAgent(BaseAgent):
             return {"status": "error", "message": f"Extended report fetch failed: {e}"}
 
     def _search_seo_data(self, task_data):
-        payload = task_data.get("task", {})
+        payload = self._extract_task_payload(task_data)
         query = payload.get("query", "")
         collection = payload.get("collection", "gsc")
-        n = int(payload.get("n", 5))
+        n = self._safe_int(payload.get("n", 5), default=5, min_value=1, max_value=50)
         if not query:
             return {"status": "error", "message": "query is required"}
         try:
@@ -250,7 +480,8 @@ class SEOAgent(BaseAgent):
             return {"status": "error", "message": f"GA4 summary failed: {e}"}
 
     def _get_ga4_page_metrics(self, task_data):
-        page_path = task_data.get("task", {}).get("page_path") or task_data.get("task", {}).get("url")
+        payload = self._extract_task_payload(task_data)
+        page_path = payload.get("page_path") or payload.get("url")
         if not page_path:
             return {"status": "error", "message": "page_path/url is required"}
         try:
@@ -271,30 +502,33 @@ class SEOAgent(BaseAgent):
             return {"status": "error", "message": f"GA4 snapshots failed: {e}"}
 
     def _ga4_conversion_audit(self, task_data):
-        days = int(task_data.get("task", {}).get("days", 28))
+        payload = self._extract_task_payload(task_data)
+        days = self._safe_int(payload.get("days", 28), default=28, min_value=1, max_value=365)
         try:
             return {"status": "success", "audit": self.ci_bridge.ga4_conversion_audit(days=days)}
         except Exception as e:
             return {"status": "error", "message": f"GA4 conversion audit failed: {e}"}
 
     def _ga4_attribution_data(self, task_data):
-        days = int(task_data.get("task", {}).get("days", 28))
+        payload = self._extract_task_payload(task_data)
+        days = self._safe_int(payload.get("days", 28), default=28, min_value=1, max_value=365)
         try:
             return {"status": "success", "attribution": self.ci_bridge.ga4_attribution_data(days=days)}
         except Exception as e:
             return {"status": "error", "message": f"GA4 attribution data failed: {e}"}
 
     def _ga4_funnel_report(self, task_data):
-        days = int(task_data.get("task", {}).get("days", 28))
+        payload = self._extract_task_payload(task_data)
+        days = self._safe_int(payload.get("days", 28), default=28, min_value=1, max_value=365)
         try:
             return {"status": "success", "funnel": self.ci_bridge.ga4_funnel_report(days=days)}
         except Exception as e:
             return {"status": "error", "message": f"GA4 funnel report failed: {e}"}
 
     def _search_reference_docs(self, task_data):
-        payload = task_data.get("task", {})
+        payload = self._extract_task_payload(task_data)
         query = payload.get("query") or payload.get("q")
-        n = int(payload.get("n", 8))
+        n = self._safe_int(payload.get("n", 8), default=8, min_value=1, max_value=100)
         source = payload.get("source")
         if not query:
             return {"status": "error", "message": "query/q is required"}
@@ -310,9 +544,9 @@ class SEOAgent(BaseAgent):
             return {"status": "error", "message": f"Reference docs sources failed: {e}"}
 
     def _train_reference_docs(self, task_data):
-        payload = task_data.get("task", {})
-        max_pages = int(payload.get("max_pages", 120))
-        max_depth = int(payload.get("max_depth", 3))
+        payload = self._extract_task_payload(task_data)
+        max_pages = self._safe_int(payload.get("max_pages", 120), default=120, min_value=1, max_value=1000)
+        max_depth = self._safe_int(payload.get("max_depth", 3), default=3, min_value=1, max_value=10)
         try:
             return {
                 "status": "success",

@@ -184,7 +184,7 @@ class BaseAgent:
             logger.error(f"Knowledge retrieval failed: {e}")
             return []
 
-    def execute_llm(self, prompt, provider="anthropic", temperature=0.2, use_knowledge=True):
+    def execute_llm(self, prompt, provider="anthropic", temperature=0.2, use_knowledge=True, use_case=None):
         """Wrapper for LLM Gateway executing with Anti-Hallucination prompt and RAG context"""
         context = ""
         if use_knowledge:
@@ -200,7 +200,8 @@ class BaseAgent:
             prompt=prompt,
             provider=provider,
             system_prompt=full_system_prompt,
-            temperature=temperature
+            temperature=temperature,
+            use_case=(str(use_case).strip() if use_case else self.AGENT_ROLE),
         )
 
     def publish_task_to_agent(self, target_agent_role, task_payload):
@@ -457,6 +458,20 @@ class BaseAgent:
         # Avoid recursive notification storms for summary/newsletter tasks.
         if task.get("type") in {"send_newsletter", "send_autonomous_summary"}:
             return
+        # Skip low-signal ignored broadcast acks (e.g. training_update_received).
+        effective_type = task_type or task.get("type") or ""
+        ignored_email_types = {
+            t.strip()
+            for t in os.getenv(
+                "TASK_SUMMARY_EMAIL_IGNORE_TYPES",
+                "training_update_received",
+            ).split(",")
+            if t.strip()
+        }
+        if effective_type in ignored_email_types:
+            return
+        if isinstance(result, dict) and result.get("ignored"):
+            return
 
         task_id = str(task_context.get("task_id") or task.get("task_id") or "")
         source_agent = str(task_context.get("source_agent") or "unknown")
@@ -615,12 +630,20 @@ class BaseAgent:
         )
 
         current_message = ""
+        execution_meta: dict[str, Any] = {}
         if isinstance(result, dict):
             current_message = str(result.get("message") or result.get("status") or "").strip()
+            exec_block = result.get("execution")
+            if isinstance(exec_block, dict):
+                execution_meta = {
+                    k: exec_block[k]
+                    for k in ("route", "duration_ms", "metrics_snapshot")
+                    if k in exec_block
+                }
         if not current_message and error_text:
             current_message = str(error_text).strip()
 
-        return {
+        detail: dict[str, Any] = {
             "why": why,
             "where": where,
             "whom": whom,
@@ -629,6 +652,9 @@ class BaseAgent:
             "current_message": current_message or "No message provided.",
             "task_payload_compact": self._compact_json(task, max_len=1200),
         }
+        if execution_meta:
+            detail["execution"] = execution_meta
+        return detail
 
     def _render_task_summary_email_body(self, summary: dict[str, Any]) -> str:
         details = summary.get("details", {}) if isinstance(summary, dict) else {}
@@ -645,6 +671,23 @@ class BaseAgent:
             f"<p><strong>Whom:</strong> {details.get('whom','')}</p>",
             f"<p><strong>Expected Outcome:</strong> {details.get('expected_outcome','')}</p>",
             f"<p><strong>Current Message:</strong> {details.get('current_message','')}</p>",
+        ]
+        exec_meta = details.get("execution")
+        if isinstance(exec_meta, dict):
+            route = exec_meta.get("route", "")
+            duration_ms = exec_meta.get("duration_ms", "")
+            metrics = exec_meta.get("metrics_snapshot")
+            lines.append("<hr>")
+            lines.append("<h4>Execution Details</h4>")
+            if route:
+                lines.append(f"<p><strong>Route:</strong> {route}</p>")
+            if duration_ms != "":
+                lines.append(f"<p><strong>Duration:</strong> {duration_ms} ms</p>")
+            if isinstance(metrics, dict):
+                metrics_str = ", ".join(f"{k}={v}" for k, v in metrics.items())
+                lines.append(f"<p><strong>Metrics:</strong> {metrics_str}</p>")
+        lines += [
+            "<hr>",
             "<details><summary><strong>Payload Snapshot</strong></summary>",
             f"<pre>{details.get('task_payload_compact','')}</pre>",
             "</details>",
